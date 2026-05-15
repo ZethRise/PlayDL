@@ -167,7 +167,7 @@ APKS_TO_APK_CMD=java -jar tools/APKEditor.jar m -i "{input}" -o "{output}"
 ## اجرا
 
 ```bash
-python -m App.main
+python Main.py
 ```
 
 ## تبدیل Split APK چطور انجام می‌شود؟

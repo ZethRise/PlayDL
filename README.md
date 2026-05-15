@@ -35,7 +35,7 @@ uv venv
 source .venv/bin/activate
 uv pip install -r requirements.txt
 cp .env.example .env
-python -m App.main
+python Main.py
 ```
 
 On Windows PowerShell:
@@ -167,7 +167,7 @@ Available template variables:
 ## Run
 
 ```bash
-python -m App.main
+python Main.py
 ```
 
 ## How Split APK Merging Works
