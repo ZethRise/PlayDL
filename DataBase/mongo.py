@@ -91,6 +91,10 @@ class Database:
 
         await db.jobs.update_one({"_id": job_id}, {"$set": updates})
 
+    async def get_job(self, job_id: int) -> dict | None:
+        db = self._require_db()
+        return await db.jobs.find_one({"_id": job_id})
+
     async def _next_job_id(self) -> int:
         db = self._require_db()
         counter = await db.counters.find_one_and_update(

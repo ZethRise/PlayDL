@@ -4,3 +4,5 @@ pymongo>=4.15,<5
 pydantic>=2.11,<3
 pydantic-settings>=2.9,<3
 python-dotenv>=1.1,<2
+selenium>=4.27,<5
+pyperclip>=1.9,<2

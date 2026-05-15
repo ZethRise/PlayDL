@@ -36,6 +36,19 @@ class Settings(BaseSettings):
     apks_to_apk_cmd: str | None = Field(default=None, alias="APKS_TO_APK_CMD")
     sign_apk_cmd: str | None = Field(default=None, alias="SIGN_APK_CMD")
 
+    nixfile_username: str | None = Field(default=None, alias="NIXFILE_USERNAME")
+    nixfile_pass: str | None = Field(default=None, alias="NIXFILE_PASS")
+    nixfile_login_url: str = Field(
+        default="https://panel.nixfile.com/auth/login",
+        alias="NIXFILE_LOGIN_URL",
+    )
+    nixfile_panel_url: str = Field(
+        default="https://panel.nixfile.com",
+        alias="NIXFILE_PANEL_URL",
+    )
+    nixfile_headless: bool = Field(default=True, alias="NIXFILE_HEADLESS")
+    nixfile_upload_timeout: int = Field(default=600, alias="NIXFILE_UPLOAD_TIMEOUT")
+
 
 def load_settings() -> Settings:
     settings = Settings()

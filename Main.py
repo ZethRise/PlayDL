@@ -11,6 +11,7 @@ from Services.bootstrap import ensure_tools
 from Services.converter import ApksConverter
 from Services.downloader import PlayDownloader
 from Services.jobs import JobRunner
+from Services.nixfile import NixfileUploader
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +37,20 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(setup_routers())
 
+    nixfile_uploader = NixfileUploader(settings)
+
     dp["settings"] = settings
     dp["db"] = db
     dp["downloader"] = PlayDownloader(settings)
     dp["converter"] = ApksConverter(settings)
     dp["job_runner"] = JobRunner(settings.max_parallel_jobs)
+    dp["nixfile_uploader"] = nixfile_uploader
 
     try:
         logger.info("Starting Telegram polling")
         await dp.start_polling(bot)
     finally:
+        await nixfile_uploader.close()
         await bot.session.close()
         await db.close()
 

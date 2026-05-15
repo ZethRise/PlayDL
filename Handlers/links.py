@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 from aiogram import F, Router
@@ -7,17 +8,28 @@ from aiogram.types import FSInputFile
 
 from Services.downloader import DownloadError
 from Services.extract import extract_package_name, is_google_play_url
+from Services.nixfile import NixfileError
 from Utils.html import bold, safe
-from Utils.keyboards import cancel_keyboard, main_keyboard
+from Utils.keyboards import (
+    cancel_keyboard,
+    delivery_keyboard,
+    link_keyboard,
+    main_keyboard,
+)
 from Utils.progress import AnimatedProgress
 from Utils.texts import (
     BAD_LINK_TEXT,
     BUSY_TEXT,
     CANCELLED_TEXT,
     CONVERTING_TEXT,
+    DELIVERY_PROMPT_TEXT,
     DONE_TEXT,
     DOWNLOAD_TITLE,
     FAILED_TEXT,
+    JOB_NOT_FOUND_TEXT,
+    LINK_READY_TEXT,
+    NIXFILE_DISABLED_TEXT,
+    NIXFILE_UPLOAD_TITLE,
     SEND_LINK_TEXT,
     UPLOAD_TITLE,
 )
@@ -83,7 +95,6 @@ class GooglePlayLinkHandler(MessageHandler):
         )
 
         download_progress: AnimatedProgress | None = None
-        upload_progress: AnimatedProgress | None = None
 
         try:
             download_progress = AnimatedProgress(status_message, DOWNLOAD_TITLE, package_label)
@@ -95,36 +106,134 @@ class GooglePlayLinkHandler(MessageHandler):
 
             await status_message.edit_text(CONVERTING_TEXT)
             apk_path = await converter.to_apk(source_path)
-            await db.update_job(job_id, "converted", apk_path=str(apk_path))
+            await db.update_job(job_id, "ready", apk_path=str(apk_path))
 
-            upload_progress = AnimatedProgress(status_message, UPLOAD_TITLE, package_label)
-            upload_progress.start()
-            await self.event.answer_document(
-                document=FSInputFile(apk_path, filename=apk_path.name),
-                caption=DONE_TEXT.format(package=package_label),
-                reply_markup=main_keyboard(),
+            await status_message.edit_text(
+                DELIVERY_PROMPT_TEXT, reply_markup=delivery_keyboard(job_id)
             )
-            await upload_progress.stop(percent=100)
-            upload_progress = None
-            await status_message.delete()
-            await db.update_job(job_id, "done")
         except DownloadError as exc:
-            await self._stop_progress(download_progress, upload_progress)
+            if download_progress:
+                await download_progress.stop()
             await db.update_job(job_id, "failed", error=str(exc))
             await status_message.edit_text(
                 FAILED_TEXT.format(error=safe(exc)),
                 reply_markup=main_keyboard(),
             )
         except Exception as exc:
-            await self._stop_progress(download_progress, upload_progress)
+            if download_progress:
+                await download_progress.stop()
             await db.update_job(job_id, "failed", error=str(exc))
             await status_message.edit_text(
                 FAILED_TEXT.format(error=safe(exc)),
                 reply_markup=main_keyboard(),
             )
 
-    @staticmethod
-    async def _stop_progress(*items: AnimatedProgress | None) -> None:
-        for item in items:
-            if item:
-                await item.stop()
+
+@router.callback_query(F.data.startswith("deliver:"))
+class DeliveryCallback(CallbackQueryHandler):
+    async def handle(self) -> Any:
+        await self.event.answer()
+        if not self.message:
+            return
+
+        try:
+            _, mode, job_id_str = (self.event.data or "").split(":", 2)
+            job_id = int(job_id_str)
+        except (ValueError, AttributeError):
+            await self.message.edit_text(JOB_NOT_FOUND_TEXT, reply_markup=main_keyboard())
+            return
+
+        db = self.data["db"]
+        job = await db.get_job(job_id)
+        if not job or not job.get("apk_path"):
+            await self.message.edit_text(JOB_NOT_FOUND_TEXT, reply_markup=main_keyboard())
+            return
+
+        apk_path = Path(job["apk_path"])
+        package_name = job.get("package_name", "")
+        package_label = bold(package_name)
+
+        if not apk_path.exists():
+            await db.update_job(job_id, "failed", error="apk_missing")
+            await self.message.edit_text(JOB_NOT_FOUND_TEXT, reply_markup=main_keyboard())
+            return
+
+        if mode == "tg":
+            await self._deliver_telegram(job_id, apk_path, package_label)
+        elif mode == "nx":
+            await self._deliver_nixfile(job_id, apk_path, package_label)
+        else:
+            await self.message.edit_text(JOB_NOT_FOUND_TEXT, reply_markup=main_keyboard())
+
+    async def _deliver_telegram(
+        self, job_id: int, apk_path: Path, package_label: str
+    ) -> None:
+        db = self.data["db"]
+        status_message = self.message
+        if status_message is None:
+            return
+
+        upload_progress = AnimatedProgress(status_message, UPLOAD_TITLE, package_label)
+        try:
+            await status_message.edit_text(
+                AnimatedProgress.render(UPLOAD_TITLE, package_label, 6)
+            )
+            upload_progress.start()
+            await self.event.message.answer_document(
+                document=FSInputFile(apk_path, filename=apk_path.name),
+                caption=DONE_TEXT.format(package=package_label),
+                reply_markup=main_keyboard(),
+            )
+            await upload_progress.stop(percent=100)
+            await status_message.delete()
+            await db.update_job(job_id, "done")
+        except Exception as exc:
+            await upload_progress.stop()
+            await db.update_job(job_id, "failed", error=str(exc))
+            await status_message.edit_text(
+                FAILED_TEXT.format(error=safe(exc)),
+                reply_markup=main_keyboard(),
+            )
+
+    async def _deliver_nixfile(
+        self, job_id: int, apk_path: Path, package_label: str
+    ) -> None:
+        db = self.data["db"]
+        status_message = self.message
+        if status_message is None:
+            return
+
+        uploader = self.data.get("nixfile_uploader")
+        if uploader is None or not uploader.enabled:
+            await status_message.edit_text(
+                NIXFILE_DISABLED_TEXT, reply_markup=main_keyboard()
+            )
+            return
+
+        upload_progress = AnimatedProgress(status_message, NIXFILE_UPLOAD_TITLE, package_label)
+        try:
+            await status_message.edit_text(
+                AnimatedProgress.render(NIXFILE_UPLOAD_TITLE, package_label, 6)
+            )
+            upload_progress.start()
+            url = await uploader.upload(apk_path)
+            await upload_progress.stop(percent=100)
+            await status_message.edit_text(
+                LINK_READY_TEXT.format(package=package_label, url=safe(url)),
+                reply_markup=link_keyboard(url),
+            )
+            await db.update_job(job_id, "done")
+        except NixfileError as exc:
+            await upload_progress.stop()
+            await db.update_job(job_id, "failed", error=str(exc))
+            await status_message.edit_text(
+                FAILED_TEXT.format(error=safe(exc)),
+                reply_markup=main_keyboard(),
+            )
+        except Exception as exc:
+            await upload_progress.stop()
+            await db.update_job(job_id, "failed", error=str(exc))
+            await status_message.edit_text(
+                FAILED_TEXT.format(error=safe(exc)),
+                reply_markup=main_keyboard(),
+            )

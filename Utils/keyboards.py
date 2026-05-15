@@ -15,3 +15,22 @@ def cancel_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="لغو", callback_data="cancel")],
         ]
     )
+
+
+def delivery_keyboard(job_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="تلگرام", callback_data=f"deliver:tg:{job_id}"),
+                InlineKeyboardButton(text="لینک داخلی", callback_data=f"deliver:nx:{job_id}"),
+            ],
+        ]
+    )
+
+
+def link_keyboard(url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="دانلود فایل", url=url)],
+        ]
+    )
