@@ -26,6 +26,8 @@ Persian guide: [README-Fa.md](README-Fa.md)
   - Alternative: [`apkeep`](https://github.com/EFForg/apkeep)
 - [`APKEditor.jar`](https://github.com/REAndroid/APKEditor/releases) for merging split APKs
 
+PlayDL can install missing helper tools on startup when `AUTO_INSTALL_TOOLS=true`. It can clone `alltechdev/gplay-apk-downloader`, install `gplaydl` with pip, install `apkeep` with Cargo if Rust is present, and download the latest APKEditor jar. It does not install OS services/packages such as Java, MongoDB, Telegram Bot API server, git, or Rust.
+
 ## Install
 
 ```bash
@@ -99,6 +101,8 @@ TELEGRAM_API_IS_LOCAL=true
 MONGODB_URI=mongodb://localhost:27017
 MONGODB_DB_NAME=playdl
 
+AUTO_INSTALL_TOOLS=true
+TOOLS_DIR=tools
 DOWNLOAD_DIR=storage/downloads
 MAX_PARALLEL_JOBS=2
 ```
@@ -111,10 +115,12 @@ This backend is closest to what the bot needs. It downloads Google Play files an
 
 ```env
 PLAY_DOWNLOADER_BACKEND=alltech-gplay
-ALLTECH_GPLAY_PATH=/opt/gplay-apk-downloader/gplay
+ALLTECH_GPLAY_PATH=tools/gplay-apk-downloader/gplay
 PLAY_ARCH=arm64
 MERGE_SPLITS=true
 ```
+
+With `AUTO_INSTALL_TOOLS=true`, the bot clones this repo into `tools/gplay-apk-downloader` if it is missing.
 
 ### gplaydl
 
@@ -123,8 +129,10 @@ MERGE_SPLITS=true
 ```env
 PLAY_DOWNLOADER_BACKEND=gplaydl
 PLAY_ARCH=arm64
-APKEDITOR_JAR=/opt/apkeditor/APKEditor.jar
+APKEDITOR_JAR=tools/APKEditor.jar
 ```
+
+With auto-install enabled, the bot runs `python -m pip install gplaydl>=2.1,<3` if the `gplaydl` command is missing.
 
 ### apkeep
 
@@ -136,6 +144,8 @@ APKEEP_SOURCE=google-play
 APKEEP_EMAIL=you@example.com
 APKEEP_TOKEN=your_aas_token
 ```
+
+With auto-install enabled, the bot runs `cargo install apkeep` if `apkeep` is missing and Cargo is available.
 
 ### Custom command
 

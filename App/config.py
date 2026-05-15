@@ -13,12 +13,17 @@ class Settings(BaseSettings):
 
     mongodb_uri: str = Field(default="mongodb://localhost:27017", alias="MONGODB_URI")
     mongodb_db_name: str = Field(default="playdl", alias="MONGODB_DB_NAME")
+    tools_dir: Path = Field(default=Path("tools"), alias="TOOLS_DIR")
     download_dir: Path = Field(default=Path("storage/downloads"), alias="DOWNLOAD_DIR")
     max_parallel_jobs: int = Field(default=2, ge=1, le=10, alias="MAX_PARALLEL_JOBS")
 
+    auto_install_tools: bool = Field(default=True, alias="AUTO_INSTALL_TOOLS")
     play_downloader_backend: str = Field(default="auto", alias="PLAY_DOWNLOADER_BACKEND")
     play_downloader_cmd: str | None = Field(default=None, alias="PLAY_DOWNLOADER_CMD")
-    alltech_gplay_path: Path = Field(default=Path("tools/gplay"), alias="ALLTECH_GPLAY_PATH")
+    alltech_gplay_path: Path = Field(
+        default=Path("tools/gplay-apk-downloader/gplay"),
+        alias="ALLTECH_GPLAY_PATH",
+    )
     play_arch: str = Field(default="arm64", alias="PLAY_ARCH")
     merge_splits: bool = Field(default=True, alias="MERGE_SPLITS")
     apkeep_source: str | None = Field(default=None, alias="APKEEP_SOURCE")
@@ -32,5 +37,6 @@ class Settings(BaseSettings):
 
 def load_settings() -> Settings:
     settings = Settings()
+    settings.tools_dir.mkdir(parents=True, exist_ok=True)
     settings.download_dir.mkdir(parents=True, exist_ok=True)
     return settings

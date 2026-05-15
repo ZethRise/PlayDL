@@ -8,6 +8,7 @@ from App.config import load_settings
 from DataBase.mongo import Database
 from Handlers import setup_routers
 from Services.converter import ApksConverter
+from Services.bootstrap import ensure_tools
 from Services.downloader import PlayDownloader
 from Services.jobs import JobRunner
 
@@ -19,6 +20,8 @@ async def main() -> None:
     )
 
     settings = load_settings()
+    await ensure_tools(settings)
+
     db = Database(settings.mongodb_uri, settings.mongodb_db_name)
     await db.connect()
     await db.migrate()

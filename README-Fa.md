@@ -26,6 +26,8 @@ English guide: [README.md](README.md)
   - جایگزین: [`apkeep`](https://github.com/EFForg/apkeep)
 - [`APKEditor.jar`](https://github.com/REAndroid/APKEditor/releases) برای merge کردن split APKها
 
+اگر `AUTO_INSTALL_TOOLS=true` باشد، PlayDL ابزارهای کمکی را موقع شروع نصب می‌کند: repo مربوط به `alltechdev/gplay-apk-downloader` را clone می‌کند، `gplaydl` را با pip نصب می‌کند، اگر Rust/Cargo نصب باشد `apkeep` را نصب می‌کند و آخرین APKEditor jar را دانلود می‌کند. سرویس‌ها و پکیج‌های سیستمی مثل Java، MongoDB، Telegram Bot API server، git و Rust را خودش نصب نمی‌کند.
+
 ## نصب
 
 ```bash
@@ -99,6 +101,8 @@ TELEGRAM_API_IS_LOCAL=true
 MONGODB_URI=mongodb://localhost:27017
 MONGODB_DB_NAME=playdl
 
+AUTO_INSTALL_TOOLS=true
+TOOLS_DIR=tools
 DOWNLOAD_DIR=storage/downloads
 MAX_PARALLEL_JOBS=2
 ```
@@ -111,10 +115,12 @@ MAX_PARALLEL_JOBS=2
 
 ```env
 PLAY_DOWNLOADER_BACKEND=alltech-gplay
-ALLTECH_GPLAY_PATH=/opt/gplay-apk-downloader/gplay
+ALLTECH_GPLAY_PATH=tools/gplay-apk-downloader/gplay
 PLAY_ARCH=arm64
 MERGE_SPLITS=true
 ```
+
+اگر `AUTO_INSTALL_TOOLS=true` باشد، ربات این repo را داخل `tools/gplay-apk-downloader` clone می‌کند.
 
 ### gplaydl
 
@@ -123,8 +129,10 @@ MERGE_SPLITS=true
 ```env
 PLAY_DOWNLOADER_BACKEND=gplaydl
 PLAY_ARCH=arm64
-APKEDITOR_JAR=/opt/apkeditor/APKEditor.jar
+APKEDITOR_JAR=tools/APKEditor.jar
 ```
+
+اگر نصب خودکار فعال باشد و دستور `gplaydl` پیدا نشود، ربات آن را با pip نصب می‌کند.
 
 ### apkeep
 
@@ -136,6 +144,8 @@ APKEEP_SOURCE=google-play
 APKEEP_EMAIL=you@example.com
 APKEEP_TOKEN=your_aas_token
 ```
+
+اگر نصب خودکار فعال باشد و `apkeep` پیدا نشود، ربات با `cargo install apkeep` نصبش می‌کند. برای این حالت Rust/Cargo باید از قبل نصب باشد.
 
 ### دستور دلخواه
 
