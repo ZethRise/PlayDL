@@ -9,13 +9,6 @@ from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 
-try:
-    import pyperclip  # type: ignore
-    _PYPERCLIP_AVAILABLE = True
-except Exception:
-    pyperclip = None  # type: ignore
-    _PYPERCLIP_AVAILABLE = False
-
 from selenium import webdriver
 from selenium.common.exceptions import (
     InvalidSessionIdException,
@@ -473,76 +466,75 @@ class NixfileUploader:
         filename: str,
         stem: str,
     ) -> WebElement | None:
-        text_locators = [
-            (By.XPATH, f"//*[contains(normalize-space(.), '{filename}')]"),
-        ]
-        if stem and stem != filename:
-            text_locators.append((By.XPATH, f"//*[contains(normalize-space(.), '{stem}')]"))
-        for locator in text_locators:
+        candidates = [stem, filename]
+        for needle in candidates:
+            if not needle:
+                continue
             with suppress(Exception):
-                elements = driver.find_elements(*locator)
-                deepest = self._deepest_match(elements)
-                if deepest is not None:
-                    return self._closest_card(driver, deepest)
+                paragraphs = driver.find_elements(
+                    By.XPATH,
+                    f"//p[contains(@class,'truncate') and "
+                    f"normalize-space(text())={self._xpath_literal(needle)}]",
+                )
+                for paragraph in paragraphs:
+                    card = self._climb_to_card(driver, paragraph)
+                    if card is not None:
+                        return card
 
-        attr_locators = [
-            (By.CSS_SELECTOR, "[data-file-name]"),
-            (By.CSS_SELECTOR, "[data-filename]"),
-            (By.CSS_SELECTOR, "[data-testid='file-card']"),
-            (By.CSS_SELECTOR, "[role='gridcell']"),
-            (By.XPATH, "//div[contains(@class,'file-card') or contains(@class,'fileCard') or contains(@class,'FileCard')]"),
-        ]
-        for locator in attr_locators:
-            with suppress(Exception):
-                for element in driver.find_elements(*locator):
-                    try:
-                        name = (
-                            element.get_attribute("data-file-name")
-                            or element.get_attribute("data-filename")
-                            or element.get_attribute("title")
-                            or ""
-                        ).strip()
-                    except StaleElementReferenceException:
-                        continue
-                    if not name:
-                        with suppress(Exception):
-                            name = (element.text or "").split("\n", 1)[0].strip()
-                    if name and name not in existing_names:
-                        return element
+                paragraphs = driver.find_elements(
+                    By.XPATH,
+                    f"//p[contains(@class,'truncate') and "
+                    f"contains(normalize-space(.), {self._xpath_literal(needle)})]",
+                )
+                for paragraph in paragraphs:
+                    card = self._climb_to_card(driver, paragraph)
+                    if card is not None:
+                        return card
+        return None
+
+    def _climb_to_card(self, driver: WebDriver, anchor: WebElement) -> WebElement | None:
+        script = (
+            "let el = arguments[0];"
+            "for (let i = 0; i < 12 && el && el.parentElement; i++) {"
+            "  el = el.parentElement;"
+            "  if (el.querySelector && el.querySelector('button[aria-haspopup=\"menu\"]')) {"
+            "    return el;"
+            "  }"
+            "}"
+            "return null;"
+        )
+        with suppress(Exception):
+            result = driver.execute_script(script, anchor)
+            if result is not None:
+                return result
         return None
 
     @staticmethod
-    def _deepest_match(elements: list[WebElement]) -> WebElement | None:
-        for element in reversed(elements):
-            with suppress(Exception):
-                if element.is_displayed():
-                    return element
-        return elements[-1] if elements else None
-
-    def _closest_card(self, driver: WebDriver, element: WebElement) -> WebElement:
-        script = (
-            "let el = arguments[0];"
-            "while (el && el.parentElement) {"
-            "  if (el.querySelector && el.querySelector('button')) return el;"
-            "  el = el.parentElement;"
-            "}"
-            "return arguments[0];"
-        )
-        try:
-            result = driver.execute_script(script, element)
-            return result or element
-        except Exception:
-            return element
+    def _xpath_literal(value: str) -> str:
+        if "'" not in value:
+            return f"'{value}'"
+        if '"' not in value:
+            return f'"{value}"'
+        parts = value.split("'")
+        return "concat('" + "',\"'\",'".join(parts) + "')"
 
     def _copy_link_from_card(self, driver: WebDriver, card: WebElement) -> str:
         try:
             menu_button = card.find_element(
-                By.XPATH,
-                ".//button[contains(@class,'menu') or contains(@class,'dots') or "
-                "contains(@aria-label,'منو') or contains(@aria-label,'گزینه')]",
+                By.XPATH, ".//button[@aria-haspopup='menu']"
             )
         except NoSuchElementException:
-            menu_button = card.find_element(By.XPATH, ".//button")
+            try:
+                menu_button = card.find_element(
+                    By.XPATH,
+                    ".//button[.//svg[contains(@class,'lucide-ellipsis-vertical') "
+                    "or contains(@class,'lucide-more-vertical') "
+                    "or contains(@class,'lucide-ellipsis')]]",
+                )
+            except NoSuchElementException:
+                menu_button = card.find_element(By.XPATH, ".//button")
+
+        self._install_clipboard_hook(driver)
 
         logger.info("[nixfile] opening file menu")
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", menu_button)
@@ -553,76 +545,100 @@ class NixfileUploader:
 
         copy_link_item = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable(
-                (By.XPATH, "//*[self::button or self::a or self::li or self::div]"
-                          "[contains(normalize-space(.), 'کپی لینک')]")
+                (
+                    By.XPATH,
+                    "//*[@role='menuitem' and contains(normalize-space(.), 'کپی لینک')] | "
+                    "//*[contains(@id,'headlessui-menu-item') and contains(normalize-space(.), 'کپی لینک')] | "
+                    "//div[@role='menu']//*[contains(normalize-space(.), 'کپی لینک')]",
+                )
             )
         )
-
         logger.info("[nixfile] clicking 'کپی لینک'")
-        if _PYPERCLIP_AVAILABLE:
-            with suppress(Exception):
-                pyperclip.copy("")  # type: ignore[union-attr]
-
         try:
             copy_link_item.click()
         except WebDriverException:
             driver.execute_script("arguments[0].click();", copy_link_item)
 
-        link = self._read_link_after_copy(driver, copy_link_item)
+        link = self._read_hooked_link(driver)
         if link:
             return link
 
-        raise NixfileError("کپی لینک از کلیپ‌بورد ناموفق بود.")
+        link = self._link_from_dom(driver)
+        if link:
+            logger.info("[nixfile] link read from DOM fallback")
+            return link
 
-    def _read_link_after_copy(self, driver: WebDriver, copy_item: WebElement) -> str:
-        deadline = time.monotonic() + 10
+        raise NixfileError("استخراج لینک کپی شده ناموفق بود.")
 
+    def _install_clipboard_hook(self, driver: WebDriver) -> None:
+        script = """
+            window.__nixCopiedLinks = window.__nixCopiedLinks || [];
+            if (!window.__nixClipboardHooked) {
+                window.__nixClipboardHooked = true;
+                try {
+                    if (navigator.clipboard) {
+                        const origWrite = navigator.clipboard.writeText
+                            ? navigator.clipboard.writeText.bind(navigator.clipboard)
+                            : null;
+                        navigator.clipboard.writeText = function(text) {
+                            try { window.__nixCopiedLinks.push(String(text)); } catch (e) {}
+                            if (origWrite) {
+                                try { return origWrite(text); } catch (e) { return Promise.resolve(); }
+                            }
+                            return Promise.resolve();
+                        };
+                    }
+                } catch (e) {}
+                try {
+                    const origExec = document.execCommand.bind(document);
+                    document.execCommand = function(cmd) {
+                        if (cmd === 'copy') {
+                            try {
+                                const sel = window.getSelection && window.getSelection().toString();
+                                if (sel) window.__nixCopiedLinks.push(String(sel));
+                                const active = document.activeElement;
+                                if (active && active.value) window.__nixCopiedLinks.push(String(active.value));
+                            } catch (e) {}
+                        }
+                        return origExec.apply(document, arguments);
+                    };
+                } catch (e) {}
+            }
+        """
+        with suppress(Exception):
+            driver.execute_script(script)
+
+    def _read_hooked_link(self, driver: WebDriver) -> str:
+        deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            if _PYPERCLIP_AVAILABLE:
-                try:
-                    candidate = (pyperclip.paste() or "").strip()  # type: ignore[union-attr]
-                except Exception as exc:
-                    logger.warning("[nixfile] pyperclip read failed: %s", exc)
-                else:
-                    if candidate.startswith("http"):
-                        logger.info("[nixfile] link read from clipboard")
-                        return candidate
-
-            link = self._link_from_dom(driver, copy_item)
-            if link:
-                logger.info("[nixfile] link read from DOM")
-                return link
-
-            time.sleep(0.4)
-
+            with suppress(Exception):
+                items = driver.execute_script("return window.__nixCopiedLinks || [];")
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, str) and item.strip().startswith("http"):
+                            logger.info("[nixfile] link captured via clipboard hook")
+                            return item.strip()
+            time.sleep(0.3)
         return ""
 
-    def _link_from_dom(self, driver: WebDriver, copy_item: WebElement) -> str:
-        with suppress(Exception):
-            href = copy_item.get_attribute("data-link") or copy_item.get_attribute("data-href") or copy_item.get_attribute("href")
-            if href and href.startswith("http"):
-                return href.strip()
-
+    def _link_from_dom(self, driver: WebDriver) -> str:
         candidates_xpath = (
             "//input[starts-with(@value,'http')] | "
+            "//textarea[starts-with(normalize-space(text()),'http')] | "
             "//*[contains(@class,'toast') or contains(@class,'snackbar') or contains(@class,'notification')]"
             "//a[starts-with(@href,'http')]"
         )
         with suppress(Exception):
             for element in driver.find_elements(By.XPATH, candidates_xpath):
-                value = element.get_attribute("value") or element.get_attribute("href") or element.text
-                if value and value.strip().startswith("http"):
-                    return value.strip()
-
-        with suppress(Exception):
-            result = driver.execute_script(
-                "if (navigator.clipboard && navigator.clipboard.readText) {"
-                "  return navigator.clipboard.readText().catch(() => null);"
-                "} else { return null; }"
-            )
-            if isinstance(result, str) and result.startswith("http"):
-                return result.strip()
-
+                value = (
+                    element.get_attribute("value")
+                    or element.get_attribute("href")
+                    or element.text
+                    or ""
+                )
+                value = value.strip()
+                if value.startswith("http"):
+                    return value
         return ""
 
     def _dump_debug(self, step: str) -> None:
