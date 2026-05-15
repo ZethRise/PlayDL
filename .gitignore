@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+.research/
+storage/downloads/
+tools/*.jar

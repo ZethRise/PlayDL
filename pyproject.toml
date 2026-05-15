@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "playdl"
+version = "0.1.0"
+description = "Persian Telegram bot for downloading Google Play apps and uploading APK files."
+requires-python = ">=3.13"
+dependencies = [
+    "aiogram>=3.28,<3.29",
+    "gplaydl>=2.1,<3",
+    "pymongo>=4.15,<5",
+    "pydantic>=2.11,<3",
+    "pydantic-settings>=2.9,<3",
+    "python-dotenv>=1.1,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.11,<0.13",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.setuptools.packages.find]
+include = ["App*", "DataBase*", "Handlers*", "Services*", "Utils*"]
