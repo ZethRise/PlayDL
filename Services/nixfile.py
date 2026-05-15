@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 import time
 import traceback
 from contextlib import suppress
@@ -49,27 +50,35 @@ class NixfileUploader:
     def enabled(self) -> bool:
         return bool(self._settings.nixfile_username and self._settings.nixfile_pass)
 
-    async def upload(self, file_path: Path) -> str:
+    async def upload(
+        self,
+        file_path: Path,
+        upload_started: threading.Event | None = None,
+    ) -> str:
         if not self.enabled:
             raise NixfileError("NIXFILE_USERNAME/NIXFILE_PASS تنظیم نشده است.")
         if not file_path.exists():
             raise NixfileError(f"فایل آپلود پیدا نشد: {file_path}")
 
         async with self._lock:
-            return await asyncio.to_thread(self._upload_sync, file_path)
+            return await asyncio.to_thread(self._upload_sync, file_path, upload_started)
 
     async def close(self) -> None:
         async with self._lock:
             await asyncio.to_thread(self._shutdown_sync)
 
-    def _upload_sync(self, file_path: Path) -> str:
+    def _upload_sync(
+        self,
+        file_path: Path,
+        upload_started: threading.Event | None,
+    ) -> str:
         step = "init"
         try:
             logger.info("[nixfile] upload starting: file=%s size=%d", file_path, file_path.stat().st_size)
             step = "ensure_login"
             self._ensure_login()
             step = "do_upload"
-            url = self._do_upload(file_path)
+            url = self._do_upload(file_path, upload_started)
             logger.info("[nixfile] upload finished: url=%s", url)
             return url
         except NixfileError as exc:
@@ -200,11 +209,15 @@ class NixfileUploader:
                 continue
         raise NixfileError(f"دکمه ورود ({label}) پیدا نشد.")
 
-    def _do_upload(self, file_path: Path) -> str:
+    def _do_upload(
+        self,
+        file_path: Path,
+        upload_started: threading.Event | None,
+    ) -> str:
         driver = self._ensure_driver()
 
         logger.info("[nixfile] ensuring files page, current_url=%s", driver.current_url)
-        if "/files" not in driver.current_url and "files" not in driver.current_url.lower():
+        if "/media" not in driver.current_url:
             self._navigate_to_files(driver)
 
         existing_names = self._existing_file_names(driver)
@@ -212,6 +225,8 @@ class NixfileUploader:
 
         file_input = self._find_file_input(driver)
         logger.info("[nixfile] file input found, sending path")
+        if upload_started is not None:
+            upload_started.set()
         file_input.send_keys(str(file_path.resolve()))
 
         new_card = self._wait_for_new_card(
@@ -222,31 +237,58 @@ class NixfileUploader:
         return self._copy_link_from_card(driver, new_card)
 
     def _navigate_to_files(self, driver: WebDriver) -> None:
-        target = self._settings.nixfile_panel_url.rstrip("/") + "/files"
+        target = self._settings.nixfile_panel_url.rstrip("/") + "/media"
         logger.info("[nixfile] navigating directly to %s", target)
         try:
             driver.get(target)
         except WebDriverException as exc:
             logger.warning("[nixfile] direct nav failed: %s; trying sidebar click", exc)
-            try:
-                link = driver.find_element(
-                    By.XPATH,
-                    "//a[.//*[contains(normalize-space(.), 'فایل های من')]] | "
-                    "//*[self::a or self::button][contains(normalize-space(.), 'فایل های من')]",
-                )
-                try:
-                    link.click()
-                except WebDriverException:
-                    driver.execute_script("arguments[0].click();", link)
-            except NoSuchElementException as inner:
-                raise NixfileError(f"ورود به صفحه فایل ها ناموفق بود: {inner}") from inner
+            self._click_sidebar_files(driver)
 
-        WebDriverWait(driver, 30).until(
+        try:
+            self._wait_files_page_ready(driver)
+            logger.info("[nixfile] files page ready, url=%s", driver.current_url)
+            return
+        except TimeoutException:
+            logger.warning("[nixfile] /media did not render files UI; trying sidebar click")
+
+        self._click_sidebar_files(driver)
+        self._wait_files_page_ready(driver)
+        logger.info("[nixfile] files page ready via sidebar, url=%s", driver.current_url)
+
+    def _click_sidebar_files(self, driver: WebDriver) -> None:
+        locators = [
+            (By.XPATH, "//aside//button[normalize-space(.)='فایل های من']"),
+            (By.XPATH, "//aside//button[contains(normalize-space(.), 'فایل های من')]"),
+            (By.XPATH, "//button[contains(normalize-space(.), 'فایل های من')]"),
+            (By.XPATH, "//a[contains(normalize-space(.), 'فایل های من')]"),
+        ]
+        for locator in locators:
+            elements = driver.find_elements(*locator)
+            if not elements:
+                continue
+            element = elements[0]
+            with suppress(Exception):
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+            try:
+                element.click()
+            except WebDriverException:
+                driver.execute_script("arguments[0].click();", element)
+            logger.info("[nixfile] sidebar 'فایل های من' clicked via %s", locator[1])
+            return
+        raise NixfileError("دکمه 'فایل های من' در سایدبار پیدا نشد.")
+
+    def _wait_files_page_ready(self, driver: WebDriver, timeout: int = 30) -> None:
+        WebDriverWait(driver, timeout).until(
             EC.presence_of_element_located(
-                (By.XPATH, "//*[contains(normalize-space(.), 'آپلود فایل')]")
+                (
+                    By.XPATH,
+                    "//button[contains(normalize-space(.), 'آپلود فایل')] | "
+                    "//*[self::button or self::a][contains(normalize-space(.), 'پوشه جدید')] | "
+                    "//input[@type='file']",
+                )
             )
         )
-        logger.info("[nixfile] files page ready, url=%s", driver.current_url)
 
     def _existing_file_names(self, driver: WebDriver) -> set[str]:
         names: set[str] = set()

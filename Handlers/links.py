@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,7 @@ from Utils.texts import (
     JOB_NOT_FOUND_TEXT,
     LINK_READY_TEXT,
     NIXFILE_DISABLED_TEXT,
+    NIXFILE_PREPARING_TEXT,
     NIXFILE_UPLOAD_TITLE,
     SEND_LINK_TEXT,
     UPLOAD_TITLE,
@@ -211,27 +214,49 @@ class DeliveryCallback(CallbackQueryHandler):
             return
 
         upload_progress = AnimatedProgress(status_message, NIXFILE_UPLOAD_TITLE, package_label)
-        try:
-            await status_message.edit_text(
-                AnimatedProgress.render(NIXFILE_UPLOAD_TITLE, package_label, 6)
-            )
+        upload_started = threading.Event()
+        progress_started = False
+
+        await status_message.edit_text(NIXFILE_PREPARING_TEXT)
+
+        async def watch_start() -> None:
+            while not upload_started.is_set():
+                await asyncio.sleep(0.3)
+            nonlocal progress_started
+            try:
+                await status_message.edit_text(
+                    AnimatedProgress.render(NIXFILE_UPLOAD_TITLE, package_label, 6)
+                )
+            except Exception:
+                pass
             upload_progress.start()
-            url = await uploader.upload(apk_path)
-            await upload_progress.stop(percent=100)
+            progress_started = True
+
+        watcher = asyncio.create_task(watch_start())
+
+        try:
+            url = await uploader.upload(apk_path, upload_started=upload_started)
+            watcher.cancel()
+            if progress_started:
+                await upload_progress.stop(percent=100)
             await status_message.edit_text(
                 LINK_READY_TEXT.format(package=package_label, url=safe(url)),
                 reply_markup=link_keyboard(url),
             )
             await db.update_job(job_id, "done")
         except NixfileError as exc:
-            await upload_progress.stop()
+            watcher.cancel()
+            if progress_started:
+                await upload_progress.stop()
             await db.update_job(job_id, "failed", error=str(exc))
             await status_message.edit_text(
                 FAILED_TEXT.format(error=safe(exc)),
                 reply_markup=main_keyboard(),
             )
         except Exception as exc:
-            await upload_progress.stop()
+            watcher.cancel()
+            if progress_started:
+                await upload_progress.stop()
             await db.update_job(job_id, "failed", error=str(exc))
             await status_message.edit_text(
                 FAILED_TEXT.format(error=safe(exc)),

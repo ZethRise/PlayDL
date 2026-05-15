@@ -16,6 +16,7 @@ FAILED_TEXT = "عملیات ناموفق بود:\n{error}"
 UNEXPECTED_ERROR_TEXT = "خطای غیرمنتظره رخ داد. لطفاً دوباره تلاش کن."
 
 DELIVERY_PROMPT_TEXT = "فایل دانلود شده و آماده است، به چه صورت میخوای دریافتش کنی؟"
+NIXFILE_PREPARING_TEXT = "در حال آماده‌سازی آپلود به نیکس‌فایل..."
 NIXFILE_UPLOAD_TITLE = "Uploading APK to NixFile..."
 LINK_READY_TEXT = "لینک داخلی آماده شد ✅\n{package}\n\n{url}"
 NIXFILE_DISABLED_TEXT = "آپلود به نیکس‌فایل پیکربندی نشده است."
