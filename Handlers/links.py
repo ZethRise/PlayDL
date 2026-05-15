@@ -18,7 +18,7 @@ from Utils.keyboards import (
     link_keyboard,
     main_keyboard,
 )
-from Utils.progress import AnimatedProgress
+from Utils.progress import AnimatedProgress, DiskSizeProgress, SnapshotProgress
 from Utils.texts import (
     BAD_LINK_TEXT,
     BUSY_TEXT,
@@ -90,20 +90,25 @@ class GooglePlayLinkHandler(MessageHandler):
         db = self.data["db"]
         downloader = self.data["downloader"]
         converter = self.data["converter"]
+        settings = self.data["settings"]
 
         job_id = await db.create_job(self.from_user.id, package_name, url)
         package_label = bold(package_name)
         status_message = await self.event.answer(
-            AnimatedProgress.render(DOWNLOAD_TITLE, package_label, 6)
+            f"{DOWNLOAD_TITLE}\n\n{package_label}\n\n📥 0 B  •  0 B/s"
         )
 
-        download_progress: AnimatedProgress | None = None
+        download_dir = settings.download_dir / str(job_id)
+        download_dir.mkdir(parents=True, exist_ok=True)
+        download_progress: DiskSizeProgress | None = None
 
         try:
-            download_progress = AnimatedProgress(status_message, DOWNLOAD_TITLE, package_label)
+            download_progress = DiskSizeProgress(
+                status_message, DOWNLOAD_TITLE, package_label, download_dir
+            )
             download_progress.start()
             source_path = await downloader.download(url=url, package_name=package_name, job_id=job_id)
-            await download_progress.stop(percent=100)
+            await download_progress.stop()
             download_progress = None
             await db.update_job(job_id, "downloaded", source_path=str(source_path))
 
@@ -213,7 +218,9 @@ class DeliveryCallback(CallbackQueryHandler):
             )
             return
 
-        upload_progress = AnimatedProgress(status_message, NIXFILE_UPLOAD_TITLE, package_label)
+        upload_progress = SnapshotProgress(
+            status_message, NIXFILE_UPLOAD_TITLE, package_label, uploader.progress_snapshot
+        )
         upload_started = threading.Event()
         progress_started = False
 
@@ -223,12 +230,6 @@ class DeliveryCallback(CallbackQueryHandler):
             while not upload_started.is_set():
                 await asyncio.sleep(0.3)
             nonlocal progress_started
-            try:
-                await status_message.edit_text(
-                    AnimatedProgress.render(NIXFILE_UPLOAD_TITLE, package_label, 6)
-                )
-            except Exception:
-                pass
             upload_progress.start()
             progress_started = True
 

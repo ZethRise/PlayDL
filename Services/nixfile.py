@@ -43,10 +43,15 @@ class NixfileUploader:
         self._driver: WebDriver | None = None
         self._lock = asyncio.Lock()
         self._logged_in = False
+        self._progress: dict | None = None
 
     @property
     def enabled(self) -> bool:
         return bool(self._settings.nixfile_username and self._settings.nixfile_pass)
+
+    def progress_snapshot(self) -> dict | None:
+        snap = self._progress
+        return dict(snap) if snap is not None else None
 
     async def upload(
         self,
@@ -99,6 +104,7 @@ class NixfileUploader:
         upload_started: threading.Event | None,
     ) -> str:
         step = "init"
+        self._progress = {"percent": 0, "info": "", "state": "preparing"}
         try:
             logger.info("[nixfile] upload starting: file=%s size=%d", file_path, file_path.stat().st_size)
             step = "ensure_login"
@@ -122,6 +128,8 @@ class NixfileUploader:
             self._dump_debug(step)
             self._shutdown_sync()
             raise NixfileError(f"[step={step}] {exc.__class__.__name__}: {exc}") from exc
+        finally:
+            self._progress = None
 
     def _ensure_driver(self) -> WebDriver:
         if self._driver is not None:
@@ -372,7 +380,7 @@ class NixfileUploader:
                 raise NixfileError("جلسه مرورگر قطع شد (chromedriver).")
 
             with suppress(Exception):
-                widget_text = self._read_upload_widget(driver)
+                widget_text, percent_value = self._read_upload_widget(driver)
                 if widget_text and widget_text != last_widget_text:
                     last_widget_text = widget_text
                     logger.info("[nixfile] upload widget: %s", widget_text)
@@ -380,6 +388,13 @@ class NixfileUploader:
                     if not upload_done_seen:
                         logger.info("[nixfile] upload widget reports completion")
                     upload_done_seen = True
+                    percent_value = max(percent_value, 99)
+                if self._progress is not None:
+                    self._progress.update(
+                        state="uploading" if not upload_done_seen else "finalizing",
+                        percent=percent_value,
+                        info=widget_text,
+                    )
 
             try:
                 card = self._find_uploaded_card(driver, existing_names, filename, stem)
@@ -447,7 +462,7 @@ class NixfileUploader:
                 return True
         return False
 
-    def _read_upload_widget(self, driver: WebDriver) -> str:
+    def _read_upload_widget(self, driver: WebDriver) -> tuple[str, int]:
         counter_text = ""
         try:
             counter = driver.find_element(
@@ -457,7 +472,7 @@ class NixfileUploader:
             )
             counter_text = (counter.text or "").strip()
         except NoSuchElementException:
-            return ""
+            return "", 0
 
         percent_text = ""
         with suppress(Exception):
@@ -467,10 +482,15 @@ class NixfileUploader:
             )
             percent_text = (pct.text or "").strip()
 
+        percent_value = 0
+        match = re.search(r"(\d{1,3})", percent_text)
+        if match:
+            percent_value = max(0, min(100, int(match.group(1))))
+
         parts = [counter_text]
         if percent_text:
             parts.append(percent_text + ("%" if "%" not in percent_text else ""))
-        return " | ".join(p for p in parts if p)[:120]
+        return " | ".join(p for p in parts if p)[:120], percent_value
 
     @staticmethod
     def _is_upload_complete(widget_text: str) -> bool:
@@ -569,17 +589,11 @@ class NixfileUploader:
         except WebDriverException:
             driver.execute_script("arguments[0].click();", menu_button)
 
-        copy_link_item = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable(
-                (
-                    By.XPATH,
-                    "//*[@role='menuitem' and contains(normalize-space(.), 'کپی لینک')] | "
-                    "//*[contains(@id,'headlessui-menu-item') and contains(normalize-space(.), 'کپی لینک')] | "
-                    "//div[@role='menu']//*[contains(normalize-space(.), 'کپی لینک')]",
-                )
-            )
-        )
-        logger.info("[nixfile] clicking 'کپی لینک'")
+        copy_link_item = self._find_menu_item(driver, "کپی لینک", timeout=10)
+        if copy_link_item is None:
+            raise NixfileError("منوی فایل باز نشد یا 'کپی لینک' پیدا نشد.")
+
+        logger.info("[nixfile] clicking 'کپی لینک' (tag=%s)", copy_link_item.tag_name)
         try:
             copy_link_item.click()
         except WebDriverException:
@@ -595,6 +609,58 @@ class NixfileUploader:
             return link
 
         raise NixfileError("استخراج لینک کپی شده ناموفق بود.")
+
+    def _find_menu_item(
+        self, driver: WebDriver, label: str, timeout: float
+    ) -> WebElement | None:
+        deadline = time.monotonic() + timeout
+        last_seen: list[str] = []
+        while time.monotonic() < deadline:
+            item = self._scan_menu_for(driver, label, last_seen)
+            if item is not None:
+                return item
+            time.sleep(0.3)
+        logger.warning("[nixfile] menu items seen: %s", last_seen)
+        return None
+
+    def _scan_menu_for(
+        self,
+        driver: WebDriver,
+        label: str,
+        last_seen: list[str],
+    ) -> WebElement | None:
+        item_selectors = [
+            (By.CSS_SELECTOR, "[role='menuitem']"),
+            (By.CSS_SELECTOR, "[id*='headlessui-menu-item']"),
+            (By.XPATH, "//div[@role='menu']//a"),
+            (By.XPATH, "//div[@role='menu']//button"),
+            (By.XPATH, "//div[@role='menu']//li"),
+        ]
+
+        candidates: list[WebElement] = []
+        for locator in item_selectors:
+            with suppress(Exception):
+                for element in driver.find_elements(*locator):
+                    candidates.append(element)
+
+        seen_local: list[str] = []
+        for element in candidates:
+            try:
+                if not element.is_displayed():
+                    continue
+                text = (element.text or "").strip()
+            except (StaleElementReferenceException, WebDriverException):
+                continue
+            if not text:
+                continue
+            seen_local.append(text)
+            if text == label or text.split("\n", 1)[0].strip() == label:
+                return element
+
+        if seen_local:
+            last_seen.clear()
+            last_seen.extend(seen_local)
+        return None
 
     def _install_clipboard_hook(self, driver: WebDriver) -> None:
         script = """
