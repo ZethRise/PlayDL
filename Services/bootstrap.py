@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 import stat
@@ -12,13 +13,16 @@ from Services.downloader import DownloadError
 
 ALLTECH_REPO_URL = "https://github.com/alltechdev/gplay-apk-downloader.git"
 APKEDITOR_RELEASE_API = "https://api.github.com/repos/REAndroid/APKEditor/releases/latest"
+logger = logging.getLogger(__name__)
 
 
 async def ensure_tools(settings: Settings) -> None:
     if not settings.auto_install_tools:
+        logger.info("Auto tool install disabled")
         return
 
     backend = settings.play_downloader_backend.strip().lower()
+    logger.info("Checking downloader tools for backend=%s", backend)
     if backend in {"auto", "alltech-gplay"}:
         await _ensure_alltech(settings)
     elif backend == "gplaydl":
@@ -28,11 +32,13 @@ async def ensure_tools(settings: Settings) -> None:
 
     if _needs_apkeditor(settings):
         await _ensure_apkeditor(settings.apkeditor_jar)
+    logger.info("Tool check finished")
 
 
 async def _ensure_alltech(settings: Settings) -> None:
     gplay_path = settings.alltech_gplay_path
     if gplay_path.exists():
+        logger.info("alltech-gplay found: %s", gplay_path)
         return
 
     repo_dir = gplay_path.parent
@@ -44,10 +50,12 @@ async def _ensure_alltech(settings: Settings) -> None:
     if not shutil.which("git"):
         raise DownloadError("git پیدا نشد. برای نصب خودکار alltech-gplay باید git نصب باشد.")
 
+    logger.info("Cloning alltech-gplay into %s", repo_dir)
     await run_process(["git", "clone", "--depth", "1", ALLTECH_REPO_URL, str(repo_dir)])
 
     requirements = repo_dir / "requirements.txt"
     if requirements.exists():
+        logger.info("Installing alltech-gplay requirements")
         await run_process([sys.executable, "-m", "pip", "install", "-r", str(requirements)])
 
     if not gplay_path.exists():
@@ -56,32 +64,41 @@ async def _ensure_alltech(settings: Settings) -> None:
     if os.name != "nt":
         mode = gplay_path.stat().st_mode
         gplay_path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    logger.info("alltech-gplay ready: %s", gplay_path)
 
 
 async def _ensure_gplaydl() -> None:
     if shutil.which("gplaydl"):
+        logger.info("gplaydl found")
         return
+    logger.info("Installing gplaydl")
     await run_process([sys.executable, "-m", "pip", "install", "gplaydl>=2.1,<3"])
 
 
 async def _ensure_apkeep() -> None:
     if shutil.which("apkeep"):
+        logger.info("apkeep found")
         return
     if not shutil.which("cargo"):
         raise DownloadError("apkeep پیدا نشد. برای نصب خودکار آن Rust/Cargo لازم است.")
-    await run_process(["cargo", "install", "apkeep"])
+    logger.info("Installing apkeep with cargo")
+    await run_process(["cargo", "install", "apkeep"], timeout=1800)
 
 
 async def _ensure_apkeditor(jar_path: Path) -> None:
     if jar_path.exists():
+        logger.info("APKEditor found: %s", jar_path)
         return
     jar_path.parent.mkdir(parents=True, exist_ok=True)
 
+    logger.info("Finding latest APKEditor release")
     asset_url = await _latest_apkeditor_asset_url()
+    logger.info("Downloading APKEditor jar to %s", jar_path)
     await _download_file(asset_url, jar_path)
 
     if not jar_path.exists():
         raise DownloadError(f"APKEditor دانلود شد اما فایل پیدا نشد: {jar_path}")
+    logger.info("APKEditor ready: %s", jar_path)
 
 
 async def _latest_apkeditor_asset_url() -> str:

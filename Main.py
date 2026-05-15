@@ -12,6 +12,8 @@ from Services.converter import ApksConverter
 from Services.downloader import PlayDownloader
 from Services.jobs import JobRunner
 
+logger = logging.getLogger(__name__)
+
 
 async def main() -> None:
     logging.basicConfig(
@@ -19,12 +21,16 @@ async def main() -> None:
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
 
+    logger.info("PlayDL starting")
     settings = load_settings()
+    logger.info("Settings loaded")
     await ensure_tools(settings)
 
+    logger.info("Connecting to MongoDB: %s", settings.mongodb_uri)
     db = Database(settings.mongodb_uri, settings.mongodb_db_name)
     await db.connect()
     await db.migrate()
+    logger.info("MongoDB ready: %s", settings.mongodb_db_name)
 
     bot = create_bot(settings)
     dp = Dispatcher()
@@ -37,6 +43,7 @@ async def main() -> None:
     dp["job_runner"] = JobRunner(settings.max_parallel_jobs)
 
     try:
+        logger.info("Starting Telegram polling")
         await dp.start_polling(bot)
     finally:
         await bot.session.close()

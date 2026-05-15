@@ -1,6 +1,6 @@
 import asyncio
 
-from Main import main
+from Main import main  # noqa: PLC0415
 
 
 if __name__ == "__main__":
