@@ -39,6 +39,7 @@ async def _ensure_alltech(settings: Settings) -> None:
     gplay_path = settings.alltech_gplay_path
     if gplay_path.exists():
         await _ensure_alltech_venv(gplay_path.parent)
+        await _ensure_alltech_auth(settings)
         logger.info("alltech-gplay found: %s", gplay_path)
         return
 
@@ -63,7 +64,30 @@ async def _ensure_alltech(settings: Settings) -> None:
     if os.name != "nt":
         mode = gplay_path.stat().st_mode
         gplay_path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    await _ensure_alltech_auth(settings)
     logger.info("alltech-gplay ready: %s", gplay_path)
+
+
+async def _ensure_alltech_auth(settings: Settings) -> None:
+    if not settings.alltech_auto_auth:
+        return
+
+    auth_file = settings.alltech_auth_file.expanduser()
+    if auth_file.exists():
+        logger.info("alltech-gplay auth found: %s", auth_file)
+        return
+
+    gplay_path = settings.alltech_gplay_path
+    logger.info("alltech-gplay auth missing; running gplay auth")
+    if gplay_path.suffix.lower() == ".py":
+        await run_process([sys.executable, str(gplay_path), "auth"])
+    else:
+        await run_process([str(gplay_path), "auth"])
+
+    if not auth_file.exists():
+        raise DownloadError(
+            f"فایل auth ساخته نشد: {auth_file}. دستور را دستی اجرا کن: {gplay_path} auth"
+        )
 
 
 async def _ensure_alltech_venv(repo_dir: Path) -> None:

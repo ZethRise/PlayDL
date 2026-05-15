@@ -116,11 +116,13 @@ This backend is closest to what the bot needs. It downloads Google Play files an
 ```env
 PLAY_DOWNLOADER_BACKEND=alltech-gplay
 ALLTECH_GPLAY_PATH=tools/gplay-apk-downloader/gplay
+ALLTECH_AUTO_AUTH=true
+ALLTECH_AUTH_FILE=~/.gplay-auth.json
 PLAY_ARCH=arm64
 MERGE_SPLITS=true
 ```
 
-With `AUTO_INSTALL_TOOLS=true`, the bot clones this repo into `tools/gplay-apk-downloader` if it is missing.
+With `AUTO_INSTALL_TOOLS=true`, the bot clones this repo into `tools/gplay-apk-downloader` if it is missing. With `ALLTECH_AUTO_AUTH=true`, it also runs `gplay auth` once if `~/.gplay-auth.json` is missing.
 
 ### gplaydl
 

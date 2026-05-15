@@ -116,11 +116,13 @@ MAX_PARALLEL_JOBS=2
 ```env
 PLAY_DOWNLOADER_BACKEND=alltech-gplay
 ALLTECH_GPLAY_PATH=tools/gplay-apk-downloader/gplay
+ALLTECH_AUTO_AUTH=true
+ALLTECH_AUTH_FILE=~/.gplay-auth.json
 PLAY_ARCH=arm64
 MERGE_SPLITS=true
 ```
 
-اگر `AUTO_INSTALL_TOOLS=true` باشد، ربات این repo را داخل `tools/gplay-apk-downloader` clone می‌کند.
+اگر `AUTO_INSTALL_TOOLS=true` باشد، ربات این repo را داخل `tools/gplay-apk-downloader` clone می‌کند. اگر `ALLTECH_AUTO_AUTH=true` باشد، وقتی `~/.gplay-auth.json` وجود نداشته باشد یک بار `gplay auth` را اجرا می‌کند.
 
 ### gplaydl
 

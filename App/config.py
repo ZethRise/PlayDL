@@ -24,6 +24,8 @@ class Settings(BaseSettings):
         default=Path("tools/gplay-apk-downloader/gplay"),
         alias="ALLTECH_GPLAY_PATH",
     )
+    alltech_auto_auth: bool = Field(default=True, alias="ALLTECH_AUTO_AUTH")
+    alltech_auth_file: Path = Field(default=Path("~/.gplay-auth.json"), alias="ALLTECH_AUTH_FILE")
     play_arch: str = Field(default="arm64", alias="PLAY_ARCH")
     merge_splits: bool = Field(default=True, alias="MERGE_SPLITS")
     apkeep_source: str | None = Field(default=None, alias="APKEEP_SOURCE")
