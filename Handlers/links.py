@@ -241,7 +241,7 @@ class DeliveryCallback(CallbackQueryHandler):
             if progress_started:
                 await upload_progress.stop(percent=100)
             await status_message.edit_text(
-                LINK_READY_TEXT.format(package=package_label, url=safe(url)),
+                LINK_READY_TEXT.format(package=package_label),
                 reply_markup=link_keyboard(url),
             )
             await db.update_job(job_id, "done")

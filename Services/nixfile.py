@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import re
@@ -9,6 +10,7 @@ import traceback
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from selenium import webdriver
 from selenium.common.exceptions import (
@@ -164,6 +166,11 @@ class NixfileUploader:
             logger.info("[nixfile] reusing existing session")
             return
 
+        if self._try_restore_session(driver):
+            self._logged_in = True
+            logger.info("[nixfile] session restored from file, url=%s", driver.current_url)
+            return
+
         username = self._settings.nixfile_username or ""
         password = self._settings.nixfile_pass or ""
 
@@ -202,6 +209,109 @@ class NixfileUploader:
         WebDriverWait(driver, 45).until(lambda d: self._on_panel(d))
         self._logged_in = True
         logger.info("[nixfile] logged in, current_url=%s", driver.current_url)
+        self._save_session(driver)
+
+    def _try_restore_session(self, driver: WebDriver) -> bool:
+        session_path = self._settings.nixfile_session_file
+        if not session_path.exists():
+            return False
+
+        try:
+            data = json.loads(session_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("[nixfile] session file unreadable: %s", exc)
+            return False
+
+        cookies = data.get("cookies") or []
+        local_storage = data.get("localStorage") or {}
+        session_storage = data.get("sessionStorage") or {}
+        if not cookies and not local_storage:
+            return False
+
+        panel_url = self._settings.nixfile_panel_url
+        host = urlparse(panel_url).netloc or "panel.nixfile.com"
+        bootstrap_url = f"https://{host}/"
+
+        logger.info("[nixfile] attempting session restore from %s", session_path)
+        with suppress(Exception):
+            driver.get(bootstrap_url)
+
+        for cookie in cookies:
+            sanitized = {k: v for k, v in cookie.items() if k in {
+                "name", "value", "path", "domain", "secure", "httpOnly", "expiry", "sameSite"
+            }}
+            if "expiry" in sanitized:
+                with suppress(Exception):
+                    sanitized["expiry"] = int(sanitized["expiry"])
+            with suppress(Exception):
+                driver.add_cookie(sanitized)
+
+        if local_storage:
+            with suppress(Exception):
+                driver.execute_script(
+                    "const d=arguments[0];"
+                    "for (const k in d) { try { localStorage.setItem(k, d[k]); } catch(e){} }",
+                    local_storage,
+                )
+        if session_storage:
+            with suppress(Exception):
+                driver.execute_script(
+                    "const d=arguments[0];"
+                    "for (const k in d) { try { sessionStorage.setItem(k, d[k]); } catch(e){} }",
+                    session_storage,
+                )
+
+        target = self._settings.nixfile_panel_url.rstrip("/") + "/media"
+        with suppress(Exception):
+            driver.get(target)
+
+        if self._on_panel(driver):
+            return True
+
+        logger.info("[nixfile] session expired/invalid, falling back to fresh login")
+        with suppress(Exception):
+            driver.delete_all_cookies()
+        return False
+
+    def _save_session(self, driver: WebDriver) -> None:
+        session_path = self._settings.nixfile_session_file
+        try:
+            session_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            logger.warning("[nixfile] cannot create session dir: %s", exc)
+            return
+
+        cookies = []
+        with suppress(Exception):
+            cookies = driver.get_cookies()
+
+        local_storage = {}
+        session_storage = {}
+        with suppress(Exception):
+            local_storage = driver.execute_script(
+                "const o={}; for (let i=0;i<localStorage.length;i++){"
+                "const k=localStorage.key(i); o[k]=localStorage.getItem(k);} return o;"
+            ) or {}
+        with suppress(Exception):
+            session_storage = driver.execute_script(
+                "const o={}; for (let i=0;i<sessionStorage.length;i++){"
+                "const k=sessionStorage.key(i); o[k]=sessionStorage.getItem(k);} return o;"
+            ) or {}
+
+        payload = {
+            "saved_at": datetime.now().isoformat(),
+            "cookies": cookies,
+            "localStorage": local_storage,
+            "sessionStorage": session_storage,
+        }
+        try:
+            session_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            logger.info(
+                "[nixfile] session saved (cookies=%d, local=%d, session=%d) to %s",
+                len(cookies), len(local_storage), len(session_storage), session_path,
+            )
+        except Exception as exc:
+            logger.warning("[nixfile] failed to write session file: %s", exc)
 
     def _on_panel(self, driver: WebDriver) -> bool:
         try:

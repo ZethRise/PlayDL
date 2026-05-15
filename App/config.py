@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     )
     nixfile_headless: bool = Field(default=True, alias="NIXFILE_HEADLESS")
     nixfile_upload_timeout: int = Field(default=600, alias="NIXFILE_UPLOAD_TIMEOUT")
+    nixfile_session_file: Path = Field(
+        default=Path("storage/nixfile-session.json"),
+        alias="NIXFILE_SESSION_FILE",
+    )
 
 
 def load_settings() -> Settings:
