@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import signal
 
 from aiogram import Dispatcher
 
@@ -46,11 +47,27 @@ async def main() -> None:
     dp["job_runner"] = JobRunner(settings.max_parallel_jobs)
     dp["nixfile_uploader"] = nixfile_uploader
 
+    loop = asyncio.get_running_loop()
+
+    def _on_signal() -> None:
+        logger.warning("Shutdown signal received; force-killing chromedriver and stopping polling")
+        nixfile_uploader.force_shutdown()
+        asyncio.create_task(dp.stop_polling())
+
+    for sig_name in ("SIGINT", "SIGTERM"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        try:
+            loop.add_signal_handler(sig, _on_signal)
+        except NotImplementedError:
+            signal.signal(sig, lambda *_: _on_signal())
+
     try:
         logger.info("Starting Telegram polling")
         await dp.start_polling(bot)
     finally:
-        await nixfile_uploader.close()
+        nixfile_uploader.force_shutdown()
         await bot.session.close()
         await db.close()
 

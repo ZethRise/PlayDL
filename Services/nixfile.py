@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+import signal
 import threading
 import time
 import traceback
@@ -16,7 +18,9 @@ except Exception:
 
 from selenium import webdriver
 from selenium.common.exceptions import (
+    InvalidSessionIdException,
     NoSuchElementException,
+    NoSuchWindowException,
     StaleElementReferenceException,
     TimeoutException,
     WebDriverException,
@@ -66,6 +70,34 @@ class NixfileUploader:
     async def close(self) -> None:
         async with self._lock:
             await asyncio.to_thread(self._shutdown_sync)
+
+    def force_shutdown(self) -> None:
+        """Synchronous, lock-free, signal-safe driver kill.
+
+        Safe to call from a signal handler or from the main loop while an
+        upload thread is still inside selenium. Kills the chromedriver
+        subprocess so any pending HTTP calls inside the worker thread
+        fail fast instead of looping forever on connection-refused.
+        """
+        driver = self._driver
+        if driver is None:
+            return
+        self._driver = None
+        self._logged_in = False
+
+        process = None
+        with suppress(Exception):
+            service = getattr(driver, "service", None)
+            process = getattr(service, "process", None) if service else None
+
+        if process is not None:
+            with suppress(Exception):
+                if os.name == "nt":
+                    process.kill()
+                else:
+                    os.kill(process.pid, signal.SIGKILL)
+        with suppress(Exception):
+            driver.quit()
 
     def _upload_sync(
         self,
@@ -230,7 +262,10 @@ class NixfileUploader:
         file_input.send_keys(str(file_path.resolve()))
 
         new_card = self._wait_for_new_card(
-            driver, existing_names, timeout=self._settings.nixfile_upload_timeout
+            driver,
+            existing_names,
+            file_path,
+            timeout=self._settings.nixfile_upload_timeout,
         )
         logger.info("[nixfile] new card detected")
 
@@ -322,38 +357,182 @@ class NixfileUploader:
         return driver.find_element(By.XPATH, "//input[@type='file']")
 
     def _wait_for_new_card(
-        self, driver: WebDriver, existing_names: set[str], timeout: int
+        self,
+        driver: WebDriver,
+        existing_names: set[str],
+        file_path: Path,
+        timeout: int,
     ) -> WebElement:
         end = time.monotonic() + timeout
-        last_error: Exception | None = None
         attempts = 0
+        last_widget_text = ""
+        last_dom_dump = 0.0
+        upload_done_seen = False
+        filename = file_path.name
+        stem = file_path.stem
+
         while time.monotonic() < end:
             attempts += 1
+
+            if not self._driver_alive(driver):
+                raise NixfileError("جلسه مرورگر قطع شد (chromedriver).")
+
+            with suppress(Exception):
+                widget_text = self._read_upload_widget(driver)
+                if widget_text and widget_text != last_widget_text:
+                    last_widget_text = widget_text
+                    logger.info("[nixfile] upload widget: %s", widget_text)
+                if widget_text and ("100" in widget_text or "1 از 1" in widget_text):
+                    upload_done_seen = True
+
             try:
-                cards = driver.find_elements(
-                    By.XPATH,
-                    "//*[(@data-file-name or @title) and "
-                    "(.//button or .//*[contains(@class,'menu') or contains(@class,'dots')])]",
+                card = self._find_uploaded_card(driver, existing_names, filename, stem)
+            except (InvalidSessionIdException, NoSuchWindowException) as exc:
+                raise NixfileError(f"جلسه مرورگر بسته شد: {exc}") from exc
+            except WebDriverException as exc:
+                if self._is_fatal_webdriver_error(exc):
+                    raise NixfileError(f"ارتباط با chromedriver قطع شد: {exc}") from exc
+                if attempts % 10 == 1:
+                    logger.warning("[nixfile] card scan recoverable error: %s", exc.__class__.__name__)
+                card = None
+            except Exception as exc:
+                if attempts % 10 == 1:
+                    logger.warning("[nixfile] card scan error: %s", exc)
+                card = None
+
+            if card is not None:
+                return card
+
+            if attempts % 5 == 1:
+                logger.info(
+                    "[nixfile] waiting for new card (attempt=%d, upload_done=%s, widget=%r)",
+                    attempts,
+                    upload_done_seen,
+                    last_widget_text[:80],
                 )
-                if attempts % 5 == 1:
-                    logger.info("[nixfile] waiting for new card (attempt=%d, candidates=%d)", attempts, len(cards))
-                for card in cards:
+
+            now = time.monotonic()
+            if now - last_dom_dump > 30:
+                self._dump_debug(f"wait_card_{attempts}")
+                last_dom_dump = now
+
+            time.sleep(1.5)
+
+        raise NixfileError(
+            f"کارت فایل آپلود شده پیدا نشد (filename={filename}, last_widget={last_widget_text!r})."
+        )
+
+    @staticmethod
+    def _driver_alive(driver: WebDriver) -> bool:
+        try:
+            _ = driver.current_url
+            return True
+        except (InvalidSessionIdException, NoSuchWindowException):
+            return False
+        except WebDriverException as exc:
+            return not NixfileUploader._is_fatal_webdriver_error(exc)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _is_fatal_webdriver_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        for marker in (
+            "connection refused",
+            "max retries exceeded",
+            "invalid session",
+            "no such window",
+            "chrome not reachable",
+            "session deleted",
+            "session not created",
+            "target window already closed",
+        ):
+            if marker in text:
+                return True
+        return False
+
+    def _read_upload_widget(self, driver: WebDriver) -> str:
+        try:
+            widget = driver.find_element(
+                By.XPATH,
+                "//*[contains(normalize-space(.), 'از') and "
+                "contains(normalize-space(.), 'فایل') and "
+                "(contains(normalize-space(.), '%') or contains(normalize-space(.), 'B'))]",
+            )
+        except NoSuchElementException:
+            return ""
+        with suppress(Exception):
+            text = " ".join((widget.text or "").split())
+            return text[:200]
+        return ""
+
+    def _find_uploaded_card(
+        self,
+        driver: WebDriver,
+        existing_names: set[str],
+        filename: str,
+        stem: str,
+    ) -> WebElement | None:
+        text_locators = [
+            (By.XPATH, f"//*[contains(normalize-space(.), '{filename}')]"),
+        ]
+        if stem and stem != filename:
+            text_locators.append((By.XPATH, f"//*[contains(normalize-space(.), '{stem}')]"))
+        for locator in text_locators:
+            with suppress(Exception):
+                elements = driver.find_elements(*locator)
+                deepest = self._deepest_match(elements)
+                if deepest is not None:
+                    return self._closest_card(driver, deepest)
+
+        attr_locators = [
+            (By.CSS_SELECTOR, "[data-file-name]"),
+            (By.CSS_SELECTOR, "[data-filename]"),
+            (By.CSS_SELECTOR, "[data-testid='file-card']"),
+            (By.CSS_SELECTOR, "[role='gridcell']"),
+            (By.XPATH, "//div[contains(@class,'file-card') or contains(@class,'fileCard') or contains(@class,'FileCard')]"),
+        ]
+        for locator in attr_locators:
+            with suppress(Exception):
+                for element in driver.find_elements(*locator):
                     try:
-                        name = (card.get_attribute("data-file-name") or card.get_attribute("title") or "").strip()
+                        name = (
+                            element.get_attribute("data-file-name")
+                            or element.get_attribute("data-filename")
+                            or element.get_attribute("title")
+                            or ""
+                        ).strip()
                     except StaleElementReferenceException:
                         continue
+                    if not name:
+                        with suppress(Exception):
+                            name = (element.text or "").split("\n", 1)[0].strip()
                     if name and name not in existing_names:
-                        logger.info("[nixfile] new card name=%s", name)
-                        return card
-            except Exception as exc:
-                last_error = exc
-                logger.warning("[nixfile] card scan error: %s", exc)
-            time.sleep(2)
+                        return element
+        return None
 
-        msg = "کارت فایل آپلود شده پیدا نشد."
-        if last_error:
-            msg += f" (last_error={last_error})"
-        raise NixfileError(msg)
+    @staticmethod
+    def _deepest_match(elements: list[WebElement]) -> WebElement | None:
+        for element in reversed(elements):
+            with suppress(Exception):
+                if element.is_displayed():
+                    return element
+        return elements[-1] if elements else None
+
+    def _closest_card(self, driver: WebDriver, element: WebElement) -> WebElement:
+        script = (
+            "let el = arguments[0];"
+            "while (el && el.parentElement) {"
+            "  if (el.querySelector && el.querySelector('button')) return el;"
+            "  el = el.parentElement;"
+            "}"
+            "return arguments[0];"
+        )
+        try:
+            result = driver.execute_script(script, element)
+            return result or element
+        except Exception:
+            return element
 
     def _copy_link_from_card(self, driver: WebDriver, card: WebElement) -> str:
         try:
