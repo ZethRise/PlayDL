@@ -573,34 +573,53 @@ class NixfileUploader:
         return False
 
     def _read_upload_widget(self, driver: WebDriver) -> tuple[str, int]:
-        counter_text = ""
+        script = r"""
+            const drawer = document.querySelector(
+                'div.fixed.bottom-0.end-0, div.fixed.bottom-0'
+            );
+            const scope = drawer || document;
+            let counter = '';
+            for (const s of scope.querySelectorAll('span')) {
+                const t = (s.innerText || s.textContent || '').replace(/\s+/g, ' ').trim();
+                if (t.includes('فایل') && t.includes('از') && /\d/.test(t)) {
+                    counter = t;
+                    break;
+                }
+            }
+            let pct = '';
+            const pctEl = scope.querySelector('span.text-2xl.text-primary')
+                || scope.querySelector('span.text-primary.text-2xl')
+                || document.querySelector('span.text-2xl.text-primary');
+            if (pctEl) {
+                pct = (pctEl.innerText || pctEl.textContent || '').replace(/\s+/g, ' ').trim();
+            }
+            return {counter: counter, pct: pct};
+        """
         try:
-            counter = driver.find_element(
-                By.XPATH,
-                "//span[contains(normalize-space(text()), 'فایل') and "
-                "contains(normalize-space(text()), 'از')]",
-            )
-            counter_text = (counter.text or "").strip()
-        except NoSuchElementException:
+            result = driver.execute_script(script) or {}
+        except Exception:
             return "", 0
 
-        percent_text = ""
-        with suppress(Exception):
-            pct = driver.find_element(
-                By.XPATH,
-                "//span[contains(@class,'text-2xl') and contains(@class,'text-primary')]",
-            )
-            percent_text = (pct.text or "").strip()
+        counter_text = (result.get("counter") or "").strip()
+        percent_text = (result.get("pct") or "").strip()
 
         percent_value = 0
         match = re.search(r"(\d{1,3})", percent_text)
         if match:
             percent_value = max(0, min(100, int(match.group(1))))
 
-        parts = [counter_text]
+        if not counter_text and percent_text:
+            counter_text = ""
+
+        parts = []
+        if counter_text:
+            parts.append(counter_text)
         if percent_text:
             parts.append(percent_text + ("%" if "%" not in percent_text else ""))
-        return " | ".join(p for p in parts if p)[:120], percent_value
+        text = " | ".join(parts)[:120]
+        if not text and percent_value == 0:
+            return "", 0
+        return text, percent_value
 
     @staticmethod
     def _is_upload_complete(widget_text: str) -> bool:
@@ -691,6 +710,8 @@ class NixfileUploader:
                 menu_button = card.find_element(By.XPATH, ".//button")
 
         self._install_clipboard_hook(driver)
+        with suppress(Exception):
+            driver.execute_script("window.__nixCopiedLinks = [];")
 
         logger.info("[nixfile] opening file menu")
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", menu_button)
@@ -816,7 +837,7 @@ class NixfileUploader:
             with suppress(Exception):
                 items = driver.execute_script("return window.__nixCopiedLinks || [];")
                 if isinstance(items, list):
-                    for item in items:
+                    for item in reversed(items):
                         if isinstance(item, str) and item.strip().startswith("http"):
                             logger.info("[nixfile] link captured via clipboard hook")
                             return item.strip()
