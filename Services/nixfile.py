@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import signal
 import threading
 import time
@@ -375,7 +376,9 @@ class NixfileUploader:
                 if widget_text and widget_text != last_widget_text:
                     last_widget_text = widget_text
                     logger.info("[nixfile] upload widget: %s", widget_text)
-                if widget_text and ("100" in widget_text or "1 از 1" in widget_text):
+                if widget_text and self._is_upload_complete(widget_text):
+                    if not upload_done_seen:
+                        logger.info("[nixfile] upload widget reports completion")
                     upload_done_seen = True
 
             try:
@@ -445,19 +448,42 @@ class NixfileUploader:
         return False
 
     def _read_upload_widget(self, driver: WebDriver) -> str:
+        counter_text = ""
         try:
-            widget = driver.find_element(
+            counter = driver.find_element(
                 By.XPATH,
-                "//*[contains(normalize-space(.), 'از') and "
-                "contains(normalize-space(.), 'فایل') and "
-                "(contains(normalize-space(.), '%') or contains(normalize-space(.), 'B'))]",
+                "//span[contains(normalize-space(text()), 'فایل') and "
+                "contains(normalize-space(text()), 'از')]",
             )
+            counter_text = (counter.text or "").strip()
         except NoSuchElementException:
             return ""
+
+        percent_text = ""
         with suppress(Exception):
-            text = " ".join((widget.text or "").split())
-            return text[:200]
-        return ""
+            pct = driver.find_element(
+                By.XPATH,
+                "//span[contains(@class,'text-2xl') and contains(@class,'text-primary')]",
+            )
+            percent_text = (pct.text or "").strip()
+
+        parts = [counter_text]
+        if percent_text:
+            parts.append(percent_text + ("%" if "%" not in percent_text else ""))
+        return " | ".join(p for p in parts if p)[:120]
+
+    @staticmethod
+    def _is_upload_complete(widget_text: str) -> bool:
+        if not widget_text:
+            return False
+        match = re.search(r"(\d+)\s*از\s*(\d+)\s*فایل", widget_text)
+        if match:
+            done, total = int(match.group(1)), int(match.group(2))
+            if total > 0 and done >= total:
+                return True
+        if re.search(r"\b100\b", widget_text):
+            return True
+        return False
 
     def _find_uploaded_card(
         self,
