@@ -38,6 +38,7 @@ async def ensure_tools(settings: Settings) -> None:
 async def _ensure_alltech(settings: Settings) -> None:
     gplay_path = settings.alltech_gplay_path
     if gplay_path.exists():
+        await _ensure_alltech_venv(gplay_path.parent)
         logger.info("alltech-gplay found: %s", gplay_path)
         return
 
@@ -54,9 +55,7 @@ async def _ensure_alltech(settings: Settings) -> None:
     await run_process(["git", "clone", "--depth", "1", ALLTECH_REPO_URL, str(repo_dir)])
 
     requirements = repo_dir / "requirements.txt"
-    if requirements.exists():
-        logger.info("Installing alltech-gplay requirements")
-        await _install_python_packages(["-r", str(requirements)])
+    await _ensure_alltech_venv(repo_dir)
 
     if not gplay_path.exists():
         raise DownloadError(f"بعد از clone، فایل gplay پیدا نشد: {gplay_path}")
@@ -65,6 +64,25 @@ async def _ensure_alltech(settings: Settings) -> None:
         mode = gplay_path.stat().st_mode
         gplay_path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     logger.info("alltech-gplay ready: %s", gplay_path)
+
+
+async def _ensure_alltech_venv(repo_dir: Path) -> None:
+    venv_python = repo_dir / ".venv" / "bin" / "python"
+    venv_activate = repo_dir / ".venv" / "bin" / "activate"
+    if os.name == "nt":
+        venv_python = repo_dir / ".venv" / "Scripts" / "python.exe"
+        venv_activate = repo_dir / ".venv" / "Scripts" / "activate"
+
+    requirements = repo_dir / "requirements.txt"
+    if venv_python.exists() and venv_activate.exists():
+        return
+
+    logger.info("Creating alltech-gplay venv in %s", repo_dir / ".venv")
+    await run_process([sys.executable, "-m", "venv", str(repo_dir / ".venv")])
+
+    if requirements.exists():
+        logger.info("Installing alltech-gplay requirements into its venv")
+        await _install_python_packages(["-r", str(requirements)], python_path=venv_python)
 
 
 async def _ensure_gplaydl() -> None:
@@ -85,8 +103,9 @@ async def _ensure_apkeep() -> None:
     await run_process(["cargo", "install", "apkeep"], timeout=1800)
 
 
-async def _install_python_packages(args: list[str]) -> None:
-    pip_command = [sys.executable, "-m", "pip", "install", *args]
+async def _install_python_packages(args: list[str], python_path: Path | None = None) -> None:
+    python = str(python_path or sys.executable)
+    pip_command = [python, "-m", "pip", "install", *args]
     try:
         await run_process(pip_command)
         return
@@ -97,8 +116,11 @@ async def _install_python_packages(args: list[str]) -> None:
     if not shutil.which("uv"):
         raise DownloadError("pip داخل venv وجود ندارد و uv هم پیدا نشد.")
 
-    logger.info("pip missing in current Python; falling back to uv pip")
-    await run_process(["uv", "pip", "install", *args])
+    logger.info("pip missing; falling back to uv pip")
+    uv_args = ["uv", "pip", "install", *args]
+    if python_path:
+        uv_args.extend(["--python", str(python_path)])
+    await run_process(uv_args)
 
 
 async def _ensure_apkeditor(jar_path: Path) -> None:
