@@ -364,6 +364,8 @@ class NixfileUploader:
         if "/media" not in driver.current_url:
             self._navigate_to_files(driver)
 
+        self._ensure_files_ui_ready(driver)
+
         existing_names = self._existing_file_names(driver)
         logger.info("[nixfile] existing file count=%d", len(existing_names))
 
@@ -436,6 +438,37 @@ class NixfileUploader:
                 )
             )
         )
+
+    def _ensure_files_ui_ready(self, driver: WebDriver) -> None:
+        for attempt in range(1, 4):
+            try:
+                self._wait_files_page_ready(driver, timeout=20)
+                logger.info("[nixfile] files UI ready on attempt %d", attempt)
+                return
+            except TimeoutException:
+                logger.warning(
+                    "[nixfile] files UI not ready (attempt %d); skeletons=%d, retrying",
+                    attempt,
+                    self._count_skeletons(driver),
+                )
+                if attempt == 1:
+                    with suppress(Exception):
+                        driver.refresh()
+                elif attempt == 2:
+                    logger.warning("[nixfile] invalidating session and re-logging in")
+                    self._logged_in = False
+                    with suppress(Exception):
+                        driver.delete_all_cookies()
+                    self._ensure_login()
+                    if "/media" not in driver.current_url:
+                        self._navigate_to_files(driver)
+        raise NixfileError("صفحه فایل ها بارگذاری نشد (UI آپلود ظاهر نشد).")
+
+    @staticmethod
+    def _count_skeletons(driver: WebDriver) -> int:
+        with suppress(Exception):
+            return len(driver.find_elements(By.CSS_SELECTOR, "[class*='skeleton']"))
+        return 0
 
     def _existing_file_names(self, driver: WebDriver) -> set[str]:
         names: set[str] = set()
