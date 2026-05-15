@@ -56,7 +56,7 @@ async def _ensure_alltech(settings: Settings) -> None:
     requirements = repo_dir / "requirements.txt"
     if requirements.exists():
         logger.info("Installing alltech-gplay requirements")
-        await run_process([sys.executable, "-m", "pip", "install", "-r", str(requirements)])
+        await _install_python_packages(["-r", str(requirements)])
 
     if not gplay_path.exists():
         raise DownloadError(f"بعد از clone، فایل gplay پیدا نشد: {gplay_path}")
@@ -72,7 +72,7 @@ async def _ensure_gplaydl() -> None:
         logger.info("gplaydl found")
         return
     logger.info("Installing gplaydl")
-    await run_process([sys.executable, "-m", "pip", "install", "gplaydl>=2.1,<3"])
+    await _install_python_packages(["gplaydl>=2.1,<3"])
 
 
 async def _ensure_apkeep() -> None:
@@ -83,6 +83,22 @@ async def _ensure_apkeep() -> None:
         raise DownloadError("apkeep پیدا نشد. برای نصب خودکار آن Rust/Cargo لازم است.")
     logger.info("Installing apkeep with cargo")
     await run_process(["cargo", "install", "apkeep"], timeout=1800)
+
+
+async def _install_python_packages(args: list[str]) -> None:
+    pip_command = [sys.executable, "-m", "pip", "install", *args]
+    try:
+        await run_process(pip_command)
+        return
+    except CommandError as exc:
+        if "No module named pip" not in str(exc):
+            raise
+
+    if not shutil.which("uv"):
+        raise DownloadError("pip داخل venv وجود ندارد و uv هم پیدا نشد.")
+
+    logger.info("pip missing in current Python; falling back to uv pip")
+    await run_process(["uv", "pip", "install", *args])
 
 
 async def _ensure_apkeditor(jar_path: Path) -> None:
