@@ -13,6 +13,7 @@ from Services.downloader import DownloadError
 
 ALLTECH_REPO_URL = "https://github.com/alltechdev/gplay-apk-downloader.git"
 APKEDITOR_RELEASE_API = "https://api.github.com/repos/REAndroid/APKEditor/releases/latest"
+APKSIGNER_RELEASE_API = "https://api.github.com/repos/patrickfav/uber-apk-signer/releases/latest"
 logger = logging.getLogger(__name__)
 
 
@@ -32,6 +33,8 @@ async def ensure_tools(settings: Settings) -> None:
 
     if _needs_apkeditor(settings):
         await _ensure_apkeditor(settings.apkeditor_jar)
+    if settings.auto_sign_apk and not settings.sign_apk_cmd:
+        await _ensure_apksigner(settings.apksigner_jar)
     logger.info("Tool check finished")
 
 
@@ -161,6 +164,43 @@ async def _ensure_apkeditor(jar_path: Path) -> None:
     if not jar_path.exists():
         raise DownloadError(f"APKEditor دانلود شد اما فایل پیدا نشد: {jar_path}")
     logger.info("APKEditor ready: %s", jar_path)
+
+
+async def _ensure_apksigner(jar_path: Path) -> None:
+    if jar_path.exists():
+        logger.info("uber-apk-signer found: %s", jar_path)
+        return
+    jar_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Finding latest uber-apk-signer release")
+    asset_url = await _latest_github_jar_asset(APKSIGNER_RELEASE_API)
+    logger.info("Downloading uber-apk-signer jar to %s", jar_path)
+    await _download_file(asset_url, jar_path)
+
+    if not jar_path.exists():
+        raise DownloadError(f"uber-apk-signer دانلود شد اما فایل پیدا نشد: {jar_path}")
+    logger.info("uber-apk-signer ready: %s", jar_path)
+
+
+async def _latest_github_jar_asset(api_url: str) -> str:
+    def fetch() -> str:
+        request = urllib.request.Request(
+            api_url,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "PlayDL"},
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        for asset in payload.get("assets", []):
+            name = asset.get("name", "")
+            url = asset.get("browser_download_url")
+            if name.endswith(".jar") and url:
+                return url
+        raise DownloadError("jar asset در latest release پیدا نشد.")
+
+    import asyncio
+
+    return await asyncio.to_thread(fetch)
 
 
 async def _latest_apkeditor_asset_url() -> str:

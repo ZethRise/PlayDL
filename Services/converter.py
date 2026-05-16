@@ -12,6 +12,10 @@ class ApksConverter:
         self._settings = settings
 
     async def to_apk(self, source_path: Path) -> Path:
+        merged = await self._materialize_apk(source_path)
+        return await self._sign_if_configured(merged)
+
+    async def _materialize_apk(self, source_path: Path) -> Path:
         if source_path.is_dir():
             return await self._merge_directory(source_path)
 
@@ -59,23 +63,49 @@ class ApksConverter:
         if not output_path.exists():
             raise DownloadError("فایل APK بعد از تبدیل پیدا نشد.")
 
-        return await self._sign_if_configured(output_path)
+        return output_path
 
     async def _sign_if_configured(self, apk_path: Path) -> Path:
         command_template = self._settings.sign_apk_cmd
-        if not command_template:
+        if command_template:
+            signed_path = apk_path.with_name(f"{apk_path.stem}-signed.apk")
+            command = self._render(command_template, input=str(apk_path), output=str(signed_path))
+            try:
+                await run_command(command)
+            except CommandError as exc:
+                raise DownloadError(f"امضای APK ناموفق بود: {exc}") from exc
+
+            if not signed_path.exists():
+                raise DownloadError("فایل APK امضا شده پیدا نشد.")
+            return signed_path
+
+        if not self._settings.auto_sign_apk:
             return apk_path
 
-        signed_path = apk_path.with_name(f"{apk_path.stem}-signed.apk")
-        command = self._render(command_template, input=str(apk_path), output=str(signed_path))
+        return await self._sign_with_uber(apk_path)
+
+    async def _sign_with_uber(self, apk_path: Path) -> Path:
+        signer = self._settings.apksigner_jar
+        if not signer.exists():
+            raise DownloadError(
+                f"uber-apk-signer پیدا نشد: {signer}. AUTO_SIGN_APK=false یا APKSIGNER_JAR را تنظیم کن."
+            )
+        java = shutil.which("java")
+        if not java:
+            raise DownloadError("Java پیدا نشد. برای امضای APK به Java 8+ نیاز است.")
+
+        command = (
+            f'"{java}" -jar "{signer}" --apks "{apk_path}" '
+            f'--out "{apk_path.parent}" --overwrite --allowResign'
+        )
         try:
             await run_command(command)
         except CommandError as exc:
             raise DownloadError(f"امضای APK ناموفق بود: {exc}") from exc
 
-        if not signed_path.exists():
-            raise DownloadError("فایل APK امضا شده پیدا نشد.")
-        return signed_path
+        if not apk_path.exists():
+            raise DownloadError("فایل APK بعد از امضا پیدا نشد.")
+        return apk_path
 
     @staticmethod
     def _render(template: str, **values: str) -> str:

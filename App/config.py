@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     apkeditor_jar: Path = Field(default=Path("tools/APKEditor.jar"), alias="APKEDITOR_JAR")
     apks_to_apk_cmd: str | None = Field(default=None, alias="APKS_TO_APK_CMD")
     sign_apk_cmd: str | None = Field(default=None, alias="SIGN_APK_CMD")
+    apksigner_jar: Path = Field(default=Path("tools/uber-apk-signer.jar"), alias="APKSIGNER_JAR")
+    auto_sign_apk: bool = Field(default=True, alias="AUTO_SIGN_APK")
 
     nixfile_username: str | None = Field(default=None, alias="NIXFILE_USERNAME")
     nixfile_pass: str | None = Field(default=None, alias="NIXFILE_PASS")
