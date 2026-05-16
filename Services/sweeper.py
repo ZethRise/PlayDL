@@ -67,7 +67,7 @@ async def _check_url_alive(session: aiohttp.ClientSession, url: str) -> bool:
     try:
         async with session.head(url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status < 400:
-                return True
+                return await _verify_not_deleted_page(session, str(resp.url))
             if resp.status in (403, 405):
                 pass
             else:
@@ -78,37 +78,87 @@ async def _check_url_alive(session: aiohttp.ClientSession, url: str) -> bool:
         async with session.get(
             url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=20)
         ) as resp:
-            return resp.status < 400
+            if resp.status >= 400:
+                return False
+            body = await resp.text(errors="replace")
+            return _body_is_live(body)
     except Exception:
         return False
 
 
+def _body_is_live(body: str) -> bool:
+    if not body:
+        return True
+    markers = (
+        "حذف شده",
+        "پیدا نشد",
+        "وجود ندارد",
+        "منقضی",
+        "deleted",
+        "not found",
+        "expired",
+        "404",
+    )
+    lowered = body.lower()
+    snippet = body[:8000].lower()
+    for marker in markers:
+        if marker in snippet:
+            return False
+    return True
+
+
+async def _verify_not_deleted_page(session: aiohttp.ClientSession, url: str) -> bool:
+    try:
+        async with session.get(
+            url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=20)
+        ) as resp:
+            if resp.status >= 400:
+                return False
+            body = await resp.text(errors="replace")
+            return _body_is_live(body)
+    except Exception:
+        return True
+
+
+async def is_nixfile_url_alive(url: str) -> bool:
+    async with aiohttp.ClientSession() as session:
+        return await _check_url_alive(session, url)
+
+
+async def _scan_nixfile_links_once(db: Database) -> None:
+    entries = await db.list_packages_with_nixfile()
+    if not entries:
+        return
+    logger.info("nixfile_link_checker scanning %d entries", len(entries))
+    async with aiohttp.ClientSession() as session:
+        for entry in entries:
+            package = entry.get("_id")
+            url = entry.get("nixfile_url")
+            if not (package and url):
+                continue
+            alive = await _check_url_alive(session, url)
+            if alive:
+                await db.touch_package_nixfile(package)
+            else:
+                logger.warning(
+                    "nixfile link dead: package=%s url=%s -> clearing",
+                    package,
+                    url,
+                )
+                await db.clear_package_nixfile(package)
+
+
 async def nixfile_link_checker(settings: Settings, db: Database) -> None:
     interval = settings.nixfile_link_check_interval_s
-    logger.info("nixfile_link_checker started (interval=%ds)", interval)
+    logger.info("nixfile_link_checker started (interval=%ds, initial scan now)", interval)
+    try:
+        await _scan_nixfile_links_once(db)
+    except Exception:
+        logger.exception("nixfile_link_checker initial scan failed")
     while True:
         try:
             await asyncio.sleep(interval)
-            entries = await db.list_packages_with_nixfile()
-            if not entries:
-                continue
-            logger.info("nixfile_link_checker scanning %d entries", len(entries))
-            async with aiohttp.ClientSession() as session:
-                for entry in entries:
-                    package = entry.get("_id")
-                    url = entry.get("nixfile_url")
-                    if not (package and url):
-                        continue
-                    alive = await _check_url_alive(session, url)
-                    if alive:
-                        await db.touch_package_nixfile(package)
-                    else:
-                        logger.warning(
-                            "nixfile link dead: package=%s url=%s -> clearing",
-                            package,
-                            url,
-                        )
-                        await db.clear_package_nixfile(package)
+            await _scan_nixfile_links_once(db)
         except asyncio.CancelledError:
             logger.info("nixfile_link_checker cancelled")
             raise

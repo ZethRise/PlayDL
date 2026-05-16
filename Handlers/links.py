@@ -11,6 +11,7 @@ from aiogram.types import FSInputFile
 from Services.downloader import DownloadError
 from Services.extract import extract_package_name, is_google_play_url
 from Services.nixfile import NixfileError
+from Services.sweeper import is_nixfile_url_alive
 from Utils.html import bold, safe
 from Utils.keyboards import (
     cancel_keyboard,
@@ -258,13 +259,15 @@ class DeliveryCallback(CallbackQueryHandler):
         cache = await db.get_package_cache(package_name)
         if cache and cache.get("nixfile_url"):
             cached_url = cache["nixfile_url"]
-            await status_message.edit_text(
-                LINK_READY_TEXT.format(package=package_label),
-                reply_markup=link_keyboard(cached_url),
-            )
-            await db.set_job_delivery(job_id, "nixfile")
-            await db.update_job(job_id, "done")
-            return
+            if await is_nixfile_url_alive(cached_url):
+                await status_message.edit_text(
+                    LINK_READY_TEXT.format(package=package_label),
+                    reply_markup=link_keyboard(cached_url),
+                )
+                await db.set_job_delivery(job_id, "nixfile")
+                await db.update_job(job_id, "done")
+                return
+            await db.clear_package_nixfile(package_name)
 
         upload_progress = SnapshotProgress(
             status_message, NIXFILE_UPLOAD_TITLE, package_label, uploader.progress_snapshot
