@@ -1,10 +1,15 @@
+import logging
 import shutil
 import sys
+from contextlib import suppress
 from pathlib import Path
 from string import Formatter
 
 from App.config import Settings
 from Services.commands import CommandError, run_command, run_process
+
+logger = logging.getLogger(__name__)
+MAX_ALLTECH_AUTH_RETRIES = 2
 
 
 class DownloadError(RuntimeError):
@@ -45,7 +50,7 @@ class PlayDownloader:
             return
 
         if backend == "alltech-gplay":
-            await run_process(self._alltech_args(package_name, output_dir))
+            await self._alltech_run_with_auth_retry(package_name, output_dir)
             return
 
         if backend == "gplaydl":
@@ -85,6 +90,66 @@ class PlayDownloader:
         raise DownloadError(
             "هیچ دانلودری پیدا نشد. ALLTECH_GPLAY_PATH یا gplaydl/apkeep یا PLAY_DOWNLOADER_CMD را تنظیم کن."
         )
+
+    async def _alltech_run_with_auth_retry(
+        self, package_name: str, output_dir: Path
+    ) -> None:
+        args = self._alltech_args(package_name, output_dir)
+        last_error: CommandError | None = None
+        for attempt in range(MAX_ALLTECH_AUTH_RETRIES + 1):
+            try:
+                await run_process(args)
+                return
+            except CommandError as exc:
+                last_error = exc
+                if not self._is_alltech_auth_error(str(exc)):
+                    raise
+                if attempt >= MAX_ALLTECH_AUTH_RETRIES:
+                    break
+                logger.warning(
+                    "alltech-gplay 401 for %s (attempt %d); rotating auth token",
+                    package_name,
+                    attempt + 1,
+                )
+                await self._alltech_force_reauth()
+        if last_error is None:
+            raise CommandError("alltech-gplay failed without raising")
+        raise last_error
+
+    @staticmethod
+    def _is_alltech_auth_error(text: str) -> bool:
+        lowered = text.lower()
+        markers = (
+            "failed to get app details: 401",
+            "401",
+            "unauthorized",
+            "authentication",
+        )
+        return any(m in lowered for m in markers)
+
+    async def _alltech_force_reauth(self) -> None:
+        auth_file = self._settings.alltech_auth_file.expanduser()
+        with suppress(Exception):
+            if auth_file.exists():
+                auth_file.unlink()
+                logger.info("alltech-gplay auth file removed: %s", auth_file)
+
+        gplay_path = self._settings.alltech_gplay_path
+        if not gplay_path.exists():
+            raise CommandError(f"alltech-gplay binary missing: {gplay_path}")
+
+        if gplay_path.suffix.lower() == ".py":
+            auth_args = [sys.executable, str(gplay_path), "auth"]
+        else:
+            auth_args = [str(gplay_path), "auth"]
+
+        logger.info("alltech-gplay re-authenticating to rotate profile")
+        await run_process(auth_args)
+
+        if not auth_file.exists():
+            raise CommandError(
+                f"alltech-gplay auth ناموفق بود؛ {auth_file} ساخته نشد. NIXFILE یا alltech تنظیمات را بررسی کن."
+            )
 
     def _alltech_args(self, package_name: str, output_dir: Path) -> list[str]:
         gplay_path = self._settings.alltech_gplay_path
