@@ -95,6 +95,25 @@ class Database:
         db = self._require_db()
         return await db.jobs.find_one({"_id": job_id})
 
+    async def set_job_delivery(self, job_id: int, delivery_mode: str) -> None:
+        db = self._require_db()
+        await db.jobs.update_one(
+            {"_id": job_id},
+            {"$set": {"delivery_mode": delivery_mode, "updated_at": self._now()}},
+        )
+
+    async def count_user_nixfile_today(self, user_id: int) -> int:
+        db = self._require_db()
+        start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        return await db.jobs.count_documents(
+            {
+                "user_id": user_id,
+                "delivery_mode": "nixfile",
+                "status": "done",
+                "updated_at": {"$gte": start},
+            }
+        )
+
     async def _next_job_id(self) -> int:
         db = self._require_db()
         counter = await db.counters.find_one_and_update(

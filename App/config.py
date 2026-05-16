@@ -52,6 +52,7 @@ class Settings(BaseSettings):
         default=Path("storage/nixfile-session.json"),
         alias="NIXFILE_SESSION_FILE",
     )
+    limit_daily_ir: int = Field(default=0, ge=0, alias="LIMIT_DAILY_IR")
 
 
 def load_settings() -> Settings:

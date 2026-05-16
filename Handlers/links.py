@@ -32,6 +32,7 @@ from Utils.texts import (
     LINK_READY_TEXT,
     NIXFILE_DISABLED_TEXT,
     NIXFILE_PREPARING_TEXT,
+    NIXFILE_QUOTA_TEXT,
     NIXFILE_UPLOAD_TITLE,
     SEND_LINK_TEXT,
     UPLOAD_TITLE,
@@ -169,6 +170,16 @@ class DeliveryCallback(CallbackQueryHandler):
         if mode == "tg":
             await self._deliver_telegram(job_id, apk_path, package_label)
         elif mode == "nx":
+            settings = self.data["settings"]
+            limit = int(getattr(settings, "limit_daily_ir", 0) or 0)
+            if limit > 0:
+                used = await db.count_user_nixfile_today(self.from_user.id)
+                if used >= limit:
+                    await self.message.edit_text(
+                        NIXFILE_QUOTA_TEXT.format(limit=limit),
+                        reply_markup=main_keyboard(),
+                    )
+                    return
             await self._deliver_nixfile(job_id, apk_path, package_label)
         else:
             await self.message.edit_text(JOB_NOT_FOUND_TEXT, reply_markup=main_keyboard())
@@ -194,6 +205,7 @@ class DeliveryCallback(CallbackQueryHandler):
             )
             await upload_progress.stop(percent=100)
             await status_message.delete()
+            await db.set_job_delivery(job_id, "telegram")
             await db.update_job(job_id, "done")
         except Exception as exc:
             await upload_progress.stop()
@@ -244,6 +256,7 @@ class DeliveryCallback(CallbackQueryHandler):
                 LINK_READY_TEXT.format(package=package_label),
                 reply_markup=link_keyboard(url),
             )
+            await db.set_job_delivery(job_id, "nixfile")
             await db.update_job(job_id, "done")
         except NixfileError as exc:
             watcher.cancel()

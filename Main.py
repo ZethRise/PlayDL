@@ -3,6 +3,7 @@ import logging
 import signal
 
 from aiogram import Dispatcher
+from aiogram.types import BotCommand
 
 from App.bot import create_bot
 from App.config import load_settings
@@ -62,6 +63,8 @@ async def main() -> None:
             loop.add_signal_handler(sig, _on_signal)
         except NotImplementedError:
             signal.signal(sig, lambda *_: _on_signal())
+
+    await bot.set_my_commands([BotCommand(command="start", description="شروع")])
 
     try:
         logger.info("Starting Telegram polling")

@@ -21,3 +21,7 @@ NIXFILE_UPLOAD_TITLE = "Uploading APK to NixFile..."
 LINK_READY_TEXT = "لینک داخلی آماده شد ✅\n{package}"
 NIXFILE_DISABLED_TEXT = "آپلود به نیکس‌فایل پیکربندی نشده است."
 JOB_NOT_FOUND_TEXT = "این فایل دیگر در دسترس نیست. لطفاً دوباره لینک بفرست."
+NIXFILE_QUOTA_TEXT = (
+    "سقف روزانه آپلود به نیکس‌فایل ({limit} فایل) به پایان رسیده است.\n"
+    "فردا دوباره تلاش کن یا از گزینه تلگرام استفاده کن."
+)
