@@ -95,6 +95,26 @@ class GooglePlayLinkHandler(MessageHandler):
 
         job_id = await db.create_job(self.from_user.id, package_name, url)
         package_label = bold(package_name)
+
+        cache = await db.get_package_cache(package_name)
+        cached_apk = None
+        if cache and cache.get("apk_path"):
+            candidate = Path(cache["apk_path"])
+            if candidate.exists():
+                cached_apk = candidate
+
+        if cached_apk is not None:
+            status_message = await self.event.answer(
+                f"{DOWNLOAD_TITLE}\n\n{package_label}\n\n♻️ از کش استفاده شد"
+            )
+            await db.update_job(
+                job_id, "ready", source_path=str(cached_apk), apk_path=str(cached_apk)
+            )
+            await status_message.edit_text(
+                DELIVERY_PROMPT_TEXT, reply_markup=delivery_keyboard(job_id)
+            )
+            return
+
         status_message = await self.event.answer(
             f"{DOWNLOAD_TITLE}\n\n{package_label}\n\n📥 0 B  •  0 B/s"
         )
@@ -116,6 +136,7 @@ class GooglePlayLinkHandler(MessageHandler):
             await status_message.edit_text(CONVERTING_TEXT)
             apk_path = await converter.to_apk(source_path)
             await db.update_job(job_id, "ready", apk_path=str(apk_path))
+            await db.set_package_apk(package_name, str(apk_path))
 
             await status_message.edit_text(
                 DELIVERY_PROMPT_TEXT, reply_markup=delivery_keyboard(job_id)
@@ -180,7 +201,7 @@ class DeliveryCallback(CallbackQueryHandler):
                         reply_markup=main_keyboard(),
                     )
                     return
-            await self._deliver_nixfile(job_id, apk_path, package_label)
+            await self._deliver_nixfile(job_id, apk_path, package_label, package_name)
         else:
             await self.message.edit_text(JOB_NOT_FOUND_TEXT, reply_markup=main_keyboard())
 
@@ -216,7 +237,11 @@ class DeliveryCallback(CallbackQueryHandler):
             )
 
     async def _deliver_nixfile(
-        self, job_id: int, apk_path: Path, package_label: str
+        self,
+        job_id: int,
+        apk_path: Path,
+        package_label: str,
+        package_name: str,
     ) -> None:
         db = self.data["db"]
         status_message = self.message
@@ -228,6 +253,17 @@ class DeliveryCallback(CallbackQueryHandler):
             await status_message.edit_text(
                 NIXFILE_DISABLED_TEXT, reply_markup=main_keyboard()
             )
+            return
+
+        cache = await db.get_package_cache(package_name)
+        if cache and cache.get("nixfile_url"):
+            cached_url = cache["nixfile_url"]
+            await status_message.edit_text(
+                LINK_READY_TEXT.format(package=package_label),
+                reply_markup=link_keyboard(cached_url),
+            )
+            await db.set_job_delivery(job_id, "nixfile")
+            await db.update_job(job_id, "done")
             return
 
         upload_progress = SnapshotProgress(
@@ -256,6 +292,7 @@ class DeliveryCallback(CallbackQueryHandler):
                 LINK_READY_TEXT.format(package=package_label),
                 reply_markup=link_keyboard(url),
             )
+            await db.set_package_nixfile(package_name, url)
             await db.set_job_delivery(job_id, "nixfile")
             await db.update_job(job_id, "done")
         except NixfileError as exc:

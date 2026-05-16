@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import signal
+from contextlib import suppress
 
 from aiogram import Dispatcher
 from aiogram.types import BotCommand
@@ -14,6 +15,7 @@ from Services.converter import ApksConverter
 from Services.downloader import PlayDownloader
 from Services.jobs import JobRunner
 from Services.nixfile import NixfileUploader
+from Services.sweeper import downloads_sweeper, nixfile_link_checker
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +68,18 @@ async def main() -> None:
 
     await bot.set_my_commands([BotCommand(command="start", description="شروع")])
 
+    sweeper_task = asyncio.create_task(downloads_sweeper(settings))
+    link_checker_task = asyncio.create_task(nixfile_link_checker(settings, db))
+
     try:
         logger.info("Starting Telegram polling")
         await dp.start_polling(bot)
     finally:
+        for task in (sweeper_task, link_checker_task):
+            task.cancel()
+        for task in (sweeper_task, link_checker_task):
+            with suppress(asyncio.CancelledError, Exception):
+                await task
         nixfile_uploader.force_shutdown()
         await bot.session.close()
         await db.close()

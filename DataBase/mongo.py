@@ -24,6 +24,7 @@ class Database:
         await db.users.create_index([("telegram_id", ASCENDING)], unique=True)
         await db.jobs.create_index([("user_id", ASCENDING), ("created_at", ASCENDING)])
         await db.jobs.create_index([("package_name", ASCENDING)])
+        await db.package_cache.create_index([("nixfile_uploaded_at", ASCENDING)])
 
         counters = db.counters
         await counters.update_one(
@@ -101,6 +102,53 @@ class Database:
             {"_id": job_id},
             {"$set": {"delivery_mode": delivery_mode, "updated_at": self._now()}},
         )
+
+    async def get_package_cache(self, package_name: str) -> dict | None:
+        db = self._require_db()
+        return await db.package_cache.find_one({"_id": package_name})
+
+    async def set_package_apk(self, package_name: str, apk_path: str) -> None:
+        db = self._require_db()
+        now = self._now()
+        await db.package_cache.update_one(
+            {"_id": package_name},
+            {
+                "$set": {"apk_path": apk_path, "apk_updated_at": now},
+                "$setOnInsert": {"_id": package_name, "created_at": now},
+            },
+            upsert=True,
+        )
+
+    async def set_package_nixfile(self, package_name: str, url: str) -> None:
+        db = self._require_db()
+        now = self._now()
+        await db.package_cache.update_one(
+            {"_id": package_name},
+            {
+                "$set": {"nixfile_url": url, "nixfile_uploaded_at": now, "nixfile_checked_at": now},
+                "$setOnInsert": {"_id": package_name, "created_at": now},
+            },
+            upsert=True,
+        )
+
+    async def clear_package_nixfile(self, package_name: str) -> None:
+        db = self._require_db()
+        await db.package_cache.update_one(
+            {"_id": package_name},
+            {"$set": {"nixfile_url": None, "nixfile_checked_at": self._now()}},
+        )
+
+    async def touch_package_nixfile(self, package_name: str) -> None:
+        db = self._require_db()
+        await db.package_cache.update_one(
+            {"_id": package_name},
+            {"$set": {"nixfile_checked_at": self._now()}},
+        )
+
+    async def list_packages_with_nixfile(self) -> list[dict]:
+        db = self._require_db()
+        cursor = db.package_cache.find({"nixfile_url": {"$ne": None}})
+        return [doc async for doc in cursor]
 
     async def count_user_nixfile_today(self, user_id: int) -> int:
         db = self._require_db()
