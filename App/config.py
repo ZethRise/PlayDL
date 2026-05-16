@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     mongodb_db_name: str = Field(default="playdl", alias="MONGODB_DB_NAME")
     tools_dir: Path = Field(default=Path("tools"), alias="TOOLS_DIR")
     download_dir: Path = Field(default=Path("storage/downloads"), alias="DOWNLOAD_DIR")
-    max_parallel_jobs: int = Field(default=2, ge=1, le=10, alias="MAX_PARALLEL_JOBS")
+    max_parallel_jobs: int = Field(default=4, ge=1, le=20, alias="MAX_PARALLEL_JOBS")
 
     auto_install_tools: bool = Field(default=True, alias="AUTO_INSTALL_TOOLS")
     play_downloader_backend: str = Field(default="auto", alias="PLAY_DOWNLOADER_BACKEND")
@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     downloads_max_mb: int = Field(default=500, ge=1, alias="DOWNLOADS_MAX_MB")
     downloads_sweep_interval_s: int = Field(default=3600, ge=60, alias="DOWNLOADS_SWEEP_INTERVAL_S")
     nixfile_link_check_interval_s: int = Field(default=21600, ge=60, alias="NIXFILE_LINK_CHECK_INTERVAL_S")
+    nixfile_max_file_mb: int = Field(default=100, ge=1, alias="NIXFILE_MAX_FILE_MB")
 
 
 def load_settings() -> Settings:

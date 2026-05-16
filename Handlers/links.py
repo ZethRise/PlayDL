@@ -34,9 +34,11 @@ from Utils.texts import (
     NIXFILE_DISABLED_TEXT,
     NIXFILE_PREPARING_TEXT,
     NIXFILE_QUOTA_TEXT,
+    NIXFILE_TOO_BIG_TEXT,
     NIXFILE_UPLOAD_TITLE,
     SEND_LINK_TEXT,
     UPLOAD_TITLE,
+    USER_BUSY_TEXT,
 )
 
 router = Router(name="links")
@@ -82,11 +84,14 @@ class GooglePlayLinkHandler(MessageHandler):
             return
 
         job_runner = self.data["job_runner"]
+        if job_runner.user_busy(self.from_user.id):
+            await self.event.answer(USER_BUSY_TEXT, reply_markup=main_keyboard())
+            return
         if not job_runner.available:
             await self.event.answer(BUSY_TEXT, reply_markup=main_keyboard())
             return
 
-        await job_runner.run(self._process(text, package_name))
+        await job_runner.run(self.from_user.id, self._process(text, package_name))
 
     async def _process(self, url: str, package_name: str) -> None:
         db = self.data["db"]
@@ -199,6 +204,15 @@ class DeliveryCallback(CallbackQueryHandler):
                 if used >= limit:
                     await self.message.edit_text(
                         NIXFILE_QUOTA_TEXT.format(limit=limit),
+                        reply_markup=main_keyboard(),
+                    )
+                    return
+            max_mb = int(getattr(settings, "nixfile_max_file_mb", 0) or 0)
+            if max_mb > 0 and apk_path.exists():
+                size_mb = apk_path.stat().st_size / (1024 * 1024)
+                if size_mb > max_mb:
+                    await self.message.edit_text(
+                        NIXFILE_TOO_BIG_TEXT.format(size_mb=size_mb, limit_mb=max_mb),
                         reply_markup=main_keyboard(),
                     )
                     return
