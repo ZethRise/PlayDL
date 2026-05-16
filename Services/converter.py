@@ -1,3 +1,4 @@
+import logging
 import shutil
 from pathlib import Path
 from string import Formatter
@@ -5,6 +6,8 @@ from string import Formatter
 from App.config import Settings
 from Services.commands import CommandError, run_command
 from Services.downloader import DownloadError
+
+logger = logging.getLogger(__name__)
 
 
 class ApksConverter:
@@ -94,17 +97,28 @@ class ApksConverter:
         if not java:
             raise DownloadError("Java پیدا نشد. برای امضای APK به Java 8+ نیاز است.")
 
+        size_before = apk_path.stat().st_size
         command = (
             f'"{java}" -jar "{signer}" --apks "{apk_path}" '
-            f'--out "{apk_path.parent}" --overwrite --allowResign'
+            f'--overwrite --allowResign'
         )
         try:
-            await run_command(command)
+            output = await run_command(command)
         except CommandError as exc:
             raise DownloadError(f"امضای APK ناموفق بود: {exc}") from exc
 
         if not apk_path.exists():
             raise DownloadError("فایل APK بعد از امضا پیدا نشد.")
+
+        size_after = apk_path.stat().st_size
+        logger.info(
+            "APK signed: %s (size %d -> %d bytes)",
+            apk_path.name,
+            size_before,
+            size_after,
+        )
+        if output:
+            logger.debug("uber-apk-signer output: %s", output[-2000:])
         return apk_path
 
     @staticmethod
