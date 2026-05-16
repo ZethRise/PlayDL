@@ -166,6 +166,9 @@ Available template variables:
 - `{output_dir}`: job download folder
 - `{arch}`: configured architecture, for example `arm64`
 
+## Uploader Setup
+go to nixfile.com, create an account and put the username & password in your **.env** file in `NIXFILE_USERNAME` and `NIXFILE_PASS` fields. the bot login in the first run and after that uses the saved session
+
 ## Run
 
 ```bash
